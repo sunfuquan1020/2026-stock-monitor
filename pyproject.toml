@@ -1,0 +1,26 @@
+[project]
+name = "stock-monitor"
+version = "0.4.0"
+description = "多市场每日股票监控系统 (A股 + 美股 + 期货)"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "httpx>=0.27.0",
+    "pandas>=2.0.0",
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
+    "akshare>=1.14.0",
+    "tqsdk>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+stock-monitor = "src.main:cli"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

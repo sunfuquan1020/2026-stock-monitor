@@ -1,0 +1,145 @@
+# Today 日报 -- {{ date }}
+
+---
+
+## 1. 今日焦点 -- 异动提醒
+
+{% set important = [] %}
+{% set normal = [] %}
+{% for a in anomalies %}
+{% if a.severity.value == 'high' or a.symbol in related_symbols %}
+{% if a.severity.value == 'high' %}
+{% set _ = important.append(a) %}
+{% endif %}
+{% else %}
+{% set _ = normal.append(a) %}
+{% endif %}
+{% endfor %}
+
+{% if important %}
+### 重要异动（需详细分析）
+
+{% for a in important %}
+{% set analysis = analyses | selectattr('symbol', 'equalto', a.symbol) | first %}
+#### {{ a.name }}（{{ a.symbol }}）-- {{ a.anomaly_type.value }}
+
+| 指标 | 数据 |
+|------|------|
+| 现价 | {{ a.details.get('close', '-') }} |
+| 涨跌幅 | {{ a.details.get('change_pct', '-') }}% |
+| 异动类型 | {{ a.anomaly_type.value }} |
+| 严重程度 | {{ a.severity.value }} |
+
+**原因分析：**
+{% if analysis %}
+{{ analysis.claude_analysis }}
+{% else %}
+（待分析）
+{% endif %}
+
+**关联假设：**
+{% for h in hypothesis_updates %}
+{% if a.symbol in h.hypothesis_text or a.symbol in (h.new_evidence | default('')) %}
+- {{ h.hypothesis_id }}: {{ h.hypothesis_text[:50] }}...
+{% endif %}
+{% endfor %}
+
+**建议：**
+- [ ] 持续观察
+- [ ] 设置止损/止盈
+- [ ] 补充研究
+
+{% endfor %}
+{% endif %}
+
+{% if normal %}
+### 普通异动（仅记录）
+
+| 股票 | 代码 | 类型 | 严重程度 | 涨跌幅 |
+|------|------|------|----------|--------|
+{% for a in normal %}
+| {{ a.name }} | {{ a.symbol }} | {{ a.anomaly_type.value }} | {{ a.severity.value }} | {{ a.details.get('change_pct', '-') }}% |
+{% endfor %}
+{% endif %}
+
+{% if not anomalies %}
+今日无异动信号。
+{% endif %}
+
+---
+
+## 2. 今日待办
+
+> 手动编辑此区域，根据异动和假设状态调整优先级
+
+### P0 -- 今日必须完成
+
+- [ ]
+- [ ]
+
+### P1 -- 本周重点
+
+- [ ]
+- [ ]
+
+### P2 -- 有空再做
+
+- [ ]
+- [ ]
+
+---
+
+## 3. 核心假设追踪
+
+{% if hypothesis_updates %}
+{% for update in hypothesis_updates %}
+### {{ update.hypothesis_id }}: {{ update.hypothesis_text }}
+
+| 维度 | 内容 |
+|------|------|
+| 当前状态 | {{ update.suggested_status.value }} |
+| 新增证据 | {{ update.new_evidence }} |
+| 评估时间 | {{ update.timestamp.strftime('%Y-%m-%d %H:%M') }} |
+
+**AI评估：**
+{{ update.claude_assessment }}
+
+**确定性变化：**
+{% if update.suggested_status.value == 'confirmed' %}
+- ↑ 假设得到加强，可考虑加仓
+{% elif update.suggested_status.value == 'needs_review' %}
+- ⚠ 需要重新评估，关注风险
+{% elif update.suggested_status.value == 'invalidated' %}
+- ↓ 假设可能失效，考虑止损
+{% else %}
+- → 维持原判，继续观察
+{% endif %}
+
+---
+{% endfor %}
+{% else %}
+暂无假设更新。
+
+{% endif %}
+
+---
+
+## 4. 新闻来源汇总
+
+{% if analyses %}
+| 股票 | 新闻标题 | 来源 | 时间 |
+|------|----------|------|------|
+{% for analysis in analyses %}
+{% for news in analysis.news_items[:3] %}
+| {{ analysis.symbol }} | {{ news.title[:40] }} | {{ news.source }} | {{ news.publish_time }} |
+{% endfor %}
+{% endfor %}
+{% else %}
+今日无新闻来源。
+
+{% endif %}
+
+---
+
+*报告生成时间: {{ generated_at }}*
+*下次更新: 明日 09:30*

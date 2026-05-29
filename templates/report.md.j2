@@ -1,0 +1,40 @@
+# 多市场每日监控报告 -- {{ date }}
+
+## 市场概览
+
+{{ market_summary }}
+
+{% if anomalies %}
+## 异常波动信号
+
+| 股票 | 代码 | 异常类型 | 严重程度 | 详情 |
+|------|------|----------|----------|------|
+{% for a in anomalies %}
+| {{ a.name }} | {{ a.symbol }} | {{ a.anomaly_type.value }} | {{ a.severity.value }} | {{ a.details | tojson }} |
+{% endfor %}
+
+{% for analysis in analyses %}
+### {{ analysis.symbol }} -- {{ analysis.anomaly.anomaly_type.value if analysis.anomaly else "分析" }}
+
+{{ analysis.claude_analysis }}
+
+{% endfor %}
+{% else %}
+今日无异常波动信号。
+{% endif %}
+
+{% if hypothesis_updates %}
+## 投资假设追踪
+
+{% for update in hypothesis_updates %}
+### {{ update.hypothesis_id }}: {{ update.hypothesis_text }}
+
+- **最新评估**: {{ update.claude_assessment }}
+- **新增证据**: {{ update.new_evidence }}
+- **状态建议**: {{ update.suggested_status.value }}
+
+{% endfor %}
+{% endif %}
+
+---
+*报告生成时间: {{ generated_at }}*

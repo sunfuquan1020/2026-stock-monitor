@@ -1,0 +1,365 @@
+# 多市场每日监控系统配置
+# 数据源: A股=AKShare, 美股=Finnhub(主)+Stooq(备), 期货=TqSdk, 辅助=WebSearch
+
+# 自选股列表（A股 + 美股，按行业分组）
+watchlist:
+  # ═══════════════════════════════════════════════════
+  # A股 (AKShare)
+  # ═══════════════════════════════════════════════════
+  # === 银行 ===
+  - symbol: "000001"
+    name: "平安银行"
+    sector: "银行"
+    market: "A股"
+  - symbol: "600016"
+    name: "民生银行"
+    sector: "银行"
+    market: "A股"
+  # === 保险 ===
+  - symbol: "601318"
+    name: "中国平安"
+    sector: "保险"
+    market: "A股"
+  # === 证券 ===
+  - symbol: "300059"
+    name: "东方财富"
+    sector: "证券"
+    market: "A股"
+  - symbol: "601688"
+    name: "华泰证券"
+    sector: "证券"
+    market: "A股"
+  # === 贵金属 ===
+  - symbol: "601899"
+    name: "紫金矿业"
+    sector: "贵金属"
+    market: "A股"
+  # === 工业金属 ===
+  - symbol: "603993"
+    name: "洛阳钼业"
+    sector: "工业金属"
+    market: "A股"
+  # === 能源金属 ===
+  - symbol: "002460"
+    name: "赣锋锂业"
+    sector: "能源金属"
+    market: "A股"
+  # === 小金属 ===
+  - symbol: "000962"
+    name: "东方钽业"
+    sector: "小金属"
+    market: "A股"
+  - symbol: "300328"
+    name: "宜安科技"
+    sector: "小金属"
+    market: "A股"
+  # === 化学制品 ===
+  - symbol: "300910"
+    name: "瑞丰新材"
+    sector: "化学制品"
+    market: "A股"
+  # === 电池 ===
+  - symbol: "300450"
+    name: "先导智能"
+    sector: "电池"
+    market: "A股"
+  - symbol: "300750"
+    name: "宁德时代"
+    sector: "电池"
+    market: "A股"
+  - symbol: "000049"
+    name: "德赛电池"
+    sector: "电池"
+    market: "A股"
+  # === 光伏设备 ===
+  - symbol: "300274"
+    name: "阳光电源"
+    sector: "光伏设备"
+    market: "A股"
+  # === 综合 ===
+  - symbol: "600089"
+    name: "特变电工"
+    sector: "综合"
+    market: "A股"
+  # === 专用设备 ===
+  - symbol: "002837"
+    name: "英维克"
+    sector: "专用设备"
+    market: "A股"
+  - symbol: "300499"
+    name: "高澜股份"
+    sector: "专用设备"
+    market: "A股"
+  # === 自动化设备 ===
+  - symbol: "688017"
+    name: "绿的谐波"
+    sector: "自动化设备"
+    market: "A股"
+  # === 消费电子 ===
+  - symbol: "601138"
+    name: "工业富联"
+    sector: "消费电子"
+    market: "A股"
+  - symbol: "000021"
+    name: "深科技"
+    sector: "消费电子"
+    market: "A股"
+  # === 白色家电 ===
+  - symbol: "002050"
+    name: "三花智控"
+    sector: "白色家电"
+    market: "A股"
+  # === 半导体 ===
+  - symbol: "688041"
+    name: "海光信息"
+    sector: "半导体"
+    market: "A股"
+  - symbol: "603986"
+    name: "兆易创新"
+    sector: "半导体"
+    market: "A股"
+  - symbol: "688981"
+    name: "中芯国际"
+    sector: "半导体"
+    market: "A股"
+  - symbol: "688256"
+    name: "寒武纪"
+    sector: "半导体"
+    market: "A股"
+  # === 计算机设备 ===
+  - symbol: "603019"
+    name: "中科曙光"
+    sector: "计算机设备"
+    market: "A股"
+  - symbol: "000977"
+    name: "浪潮信息"
+    sector: "计算机设备"
+    market: "A股"
+  # === 文化传媒 ===
+  - symbol: "603000"
+    name: "人民网"
+    sector: "文化传媒"
+    market: "A股"
+  - symbol: "300364"
+    name: "中文在线"
+    sector: "文化传媒"
+    market: "A股"
+  - symbol: "000681"
+    name: "视觉中国"
+    sector: "文化传媒"
+    market: "A股"
+  # === 影视院线 ===
+  - symbol: "002292"
+    name: "奥飞娱乐"
+    sector: "影视院线"
+    market: "A股"
+  # === 医疗服务 ===
+  - symbol: "000516"
+    name: "国际医学"
+    sector: "医疗服务"
+    market: "A股"
+  # === 食品饮料 ===
+  - symbol: "600519"
+    name: "贵州茅台"
+    sector: "食品饮料"
+    market: "A股"
+
+  # ═══════════════════════════════════════════════════
+  # 美股 (Finnhub主 + Stooq备)
+  # ═══════════════════════════════════════════════════
+  # === 半导体 ===
+  - symbol: "NVDA"
+    name: "英伟达"
+    sector: "半导体"
+    market: "美股"
+  - symbol: "AMD"
+    name: "超威半导体"
+    sector: "半导体"
+    market: "美股"
+  - symbol: "AVGO"
+    name: "博通"
+    sector: "半导体"
+    market: "美股"
+  - symbol: "TSM"
+    name: "台积电"
+    sector: "半导体"
+    market: "美股"
+  # === 软件与云计算 ===
+  - symbol: "MSFT"
+    name: "微软"
+    sector: "软件与云计算"
+    market: "美股"
+  - symbol: "ORCL"
+    name: "甲骨文"
+    sector: "软件与云计算"
+    market: "美股"
+  - symbol: "PLTR"
+    name: "Palantir"
+    sector: "软件与云计算"
+    market: "美股"
+  # === 互联网与电商 ===
+  - symbol: "AMZN"
+    name: "亚马逊"
+    sector: "互联网与电商"
+    market: "美股"
+  - symbol: "META"
+    name: "Meta"
+    sector: "互联网与电商"
+    market: "美股"
+  - symbol: "GOOGL"
+    name: "谷歌(A)"
+    sector: "互联网与电商"
+    market: "美股"
+  - symbol: "PDD"
+    name: "拼多多"
+    sector: "互联网与电商"
+    market: "美股"
+  - symbol: "BABA"
+    name: "阿里巴巴"
+    sector: "互联网与电商"
+    market: "美股"
+  - symbol: "NFLX"
+    name: "奈飞"
+    sector: "互联网与电商"
+    market: "美股"
+  # === 消费电子与硬件 ===
+  - symbol: "AAPL"
+    name: "苹果"
+    sector: "消费电子与硬件"
+    market: "美股"
+  - symbol: "TSLA"
+    name: "特斯拉"
+    sector: "消费电子与硬件"
+    market: "美股"
+  # === 金融 ===
+  - symbol: "JPM"
+    name: "摩根大通"
+    sector: "金融"
+    market: "美股"
+  - symbol: "BRK.B"
+    name: "伯克希尔(B)"
+    sector: "金融"
+    market: "美股"
+  # === 能源与资源 ===
+  - symbol: "MP"
+    name: "MP Materials"
+    sector: "能源与资源"
+    market: "美股"
+
+  # ═══════════════════════════════════════════════════
+  # 期货 (TqSdk 天勤量化)
+  # ═══════════════════════════════════════════════════
+  # 交易所前缀: SHFE(上期所), DCE(大商所), CZCE(郑商所), CFFEX(中金所), INE(能源中心)
+  - symbol: "SHFE.au2508"
+    name: "沪金2508"
+    sector: "贵金属期货"
+    market: "期货"
+  - symbol: "SHFE.ag2508"
+    name: "沪银2508"
+    sector: "贵金属期货"
+    market: "期货"
+  - symbol: "SHFE.cu2507"
+    name: "沪铜2507"
+    sector: "工业金属期货"
+    market: "期货"
+  - symbol: "SHFE.rb2510"
+    name: "螺纹钢2510"
+    sector: "黑色系期货"
+    market: "期货"
+  - symbol: "CFFEX.IF2506"
+    name: "沪深300股指2506"
+    sector: "股指期货"
+    market: "期货"
+  - symbol: "CZCE.MA509"
+    name: "甲醇509"
+    sector: "化工期货"
+    market: "期货"
+  - symbol: "DCE.i2509"
+    name: "铁矿石2509"
+    sector: "黑色系期货"
+    market: "期货"
+  - symbol: "INE.sc2507"
+    name: "原油2507"
+    sector: "能源期货"
+    market: "期货"
+  - symbol: "CZCE.TA609"
+    name: "PTA主力"
+    sector: "化工期货"
+    market: "期货"
+  - symbol: "GFEX.LC607"
+    name: "碳酸锂主力"
+    sector: "新能源期货"
+    market: "期货"
+
+# 异动检测阈值
+thresholds:
+  price_change_pct: 5.0       # 日涨跌幅超过此值触发
+  volume_spike_ratio: 2.5     # 成交量超过20日均量的倍数
+  consecutive_days: 3          # 连续同方向天数
+  consecutive_change_pct: 3.0  # 连续变化累计百分比
+  lookback_days: 30            # 历史数据窗口
+
+# 投资假设追踪
+hypotheses:
+  - id: "h1"
+    text: "银行板块将受益于降息周期，估值修复"
+    related_symbols: ["000001", "601398"]
+    active: true
+  - id: "h2"
+    text: "消费复苏预期下白酒板块将迎来戴维斯双击"
+    related_symbols: ["600519", "000858"]
+    active: true
+  - id: "h3"
+    text: "AI算力需求持续增长，半导体产业链受益"
+    related_symbols: ["NVDA", "AVGO", "688041"]
+    active: true
+
+# LLM提供商设置
+# provider: "claude" / "ollama" / "openrouter" / "nvidia"
+llm:
+  provider: "openrouter"
+
+# Claude API设置（provider=claude时生效）
+claude:
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 1024
+  # API key从环境变量ANTHROPIC_API_KEY读取
+
+# Ollama设置（provider=ollama时生效）
+ollama:
+  model: "gemma4:31b-cloud"
+  base_url: "http://localhost:11434"
+  # base_url: "http://your-server:11434"  # 远程服务器
+
+# OpenRouter设置（provider=openrouter时生效）
+# 注册: https://openrouter.ai  获取API Key
+# 模型列表: https://openrouter.ai/models
+# API key从环境变量OPENROUTER_API_KEY读取
+openrouter:
+  model: "openrouter/free"
+  # 其他推荐模型:
+  #   "google/gemini-2.0-flash-exp:free"     免费
+  #   "deepseek/deepseek-chat"               便宜
+  #   "anthropic/claude-sonnet-4"             高质量
+
+# NVIDIA build.nvidia.com设置（provider=nvidia时生效）
+# 注册: https://build.nvidia.com  获取API Key
+# 模型列表: https://build.nvidia.com/explore/discover
+# API key从环境变量NVIDIA_API_KEY读取
+nvidia:
+  model: "deepseek-ai/deepseek-v4-flash"
+  # 其他推荐模型:
+  #   "meta/llama-3.1-405b-instruct"         最强开源
+  #   "nvidia/nemotron-4-340b-instruct"       NVIDIA自研
+  #   "deepseek/deepseek-r1"                  推理模型
+
+# TqSdk天勤量化设置（期货数据源）
+# 注册: https://www.shinnytech.com/tianqin  获取账号密码
+tqsdk:
+  username: ""  # TODO: 填写天勤账号
+  password: ""  # TODO: 填写天勤密码
+
+# 输出设置
+output:
+  dir: "output"
+  keep_days: 30
