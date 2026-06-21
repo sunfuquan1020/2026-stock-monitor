@@ -1,10 +1,10 @@
 # 股票监控系统
 
-多市场每日股票监控系统 - 监控A股+美股+期货自选标的异动，自动搜索新闻并用AI分析原因，追踪核心投资假设，生成每日报告。
+每日股票监控系统 - 监控A股+美股自选标的异动，自动搜索新闻并用AI分析原因，追踪核心投资假设，生成每日报告。
 
 ## 功能特性
 
-- **多市场支持**: 同时监控A股、美股和中国期货
+- **多市场支持**: 同时监控A股和美股
 - **异动检测**: 价格大幅波动、成交量异常、连续涨跌
 - **AI分析**: 自动获取新闻并用LLM分析异动原因
 - **假设追踪**: 追踪投资假设的验证状态
@@ -14,9 +14,14 @@
 
 | 市场 | 数据源 | 说明 |
 |------|--------|------|
-| A股 | AKShare | 历史行情 + 新闻 (东方财富) |
-| 美股 | Finnhub (主) + Stooq (备) | 实时行情，Finnhub需API Key |
-| 期货 | TqSdk (天勤量化) | 日K线数据，需天勤账号 |
+| A股历史行情 | AKShare (主) + mootdx (兜底) | AKShare 限流失败时自动用通达信 mootdx 兜底，不封 IP |
+| A股基本面 | 腾讯财经 | PE/PB/市值/换手率/量比/涨跌停，GBK 直连、无需 key |
+| A股新闻 | AKShare (东方财富) | 个股新闻 |
+| 美股行情 | Finnhub (今日) + Stooq (备) + Yahoo (历史K线) | Finnhub 需 API Key；Yahoo 回填历史 OHLCV 含真实成交量 |
+| 港股行情 | Yahoo Finance chart | 唯一日 K 线源，自动 `00700 -> 0700.HK` |
+| 美股/港股基本面 | Yahoo quoteSummary | PE/前瞻PE/PB/PEG/市值/ROE/利润率/目标价/评级 |
+
+> A股增强集成自 [a-stock-data](https://github.com/simonlin1212/a-stock-data)（腾讯财经 + mootdx），美股/港股增强集成自 [global-stock-data](https://github.com/simonlin1212/global-stock-data)（Yahoo Finance）。
 
 ## 安装
 
@@ -59,18 +64,6 @@ export NVIDIA_API_KEY="your-key"
 # Finnhub (美股主要数据源)
 export FINNHUB_API_KEY="your-key"
 ```
-
-### 5. 配置期货账号 (可选)
-
-如果需要监控期货，在 `config.yaml` 中填写天勤账号:
-
-```yaml
-tqsdk:
-  username: "your-tianqin-username"
-  password: "your-tianqin-password"
-```
-
-注册地址: https://www.shinnytech.com/tianqin
 
 ## 使用方法
 
@@ -127,19 +120,11 @@ watchlist:
     name: "苹果"
     sector: "消费电子"
     market: "美股"
-  # 期货
-  - symbol: "SHFE.au2508"
-    name: "沪金2508"
-    sector: "贵金属期货"
-    market: "期货"
 ```
 
-期货合约代码格式: `交易所.合约代码`
-- SHFE: 上期所 (铜、铝、金、银、螺纹钢等)
-- DCE: 大商所 (铁矿石、焦炭、豆粕等)
-- CZCE: 郑商所 (甲醇、白糖、PTA等)
-- CFFEX: 中金所 (股指期货IF/IH/IC/IM)
-- INE: 能源中心 (原油SC)
+代码格式自动识别市场:
+- A股: 6位数字 (如 `000001`、`600519`、`300750`)
+- 美股: 字母代码 (如 `AAPL`、`NVDA`、`BRK.B`)
 
 ### 异动检测阈值
 
@@ -176,21 +161,12 @@ hypotheses:
     active: true
 ```
 
-### TqSdk期货配置
-
-```yaml
-tqsdk:
-  username: ""  # 天勤账号
-  password: ""  # 天勤密码
-```
-
 ## 输出
 
 - **每日报告**: `output/YYYY-MM-DD.md`
 - **Today日报**: `output/YYYY-MM-DD-today.md`
 - **假设历史**: `output/hypothesis_history.json`
 - **美股历史**: `output/us_quote_history.json`
-- **期货历史**: `output/futures_quote_history.json`
 
 ## 运行测试
 
@@ -207,46 +183,72 @@ pytest tests/ --cov=src
 
 ## 更新日志
 
-### v0.4.0 - 数据源重构
+### v0.7.0 - 美股/港股数据增强
 
-**重大变更**: 全面更换数据源，新增期货支持
+集成 [global-stock-data](https://github.com/simonlin1212/global-stock-data) skill 思路，增强美股行情、新增港股支持与美股/港股基本面。
 
 #### 变更内容
 
-1. **fetcher.py**
-   - A股数据源: yfinance → AKShare (`ak.stock_zh_a_hist`)
-   - 美股数据源: Stooq(主)+Finnhub(备) → Finnhub(主)+Stooq(备)
-   - 新增期货数据源: TqSdk (`api.get_kline_serial`)
-   - 成交额直接使用AKShare提供的精确值
-   - 涨跌幅直接使用AKShare提供的数据
+1. **新增 `src/global_stock.py`**
+   - Yahoo chart v8 日 K 线（零 crumb）：美股 + 港股完整 OHLCV，含真实成交量
+   - Yahoo quoteSummary 基本面（自动 cookie+crumb）：PE/前瞻PE/PB/PEG/市值/ROE/利润率/目标价/评级
+   - `to_yahoo_symbol()`：美股点号转横线（BRK.B→BRK-B），港股补零加后缀（00700→0700.HK）
 
-2. **news.py**
-   - A股新闻源: yfinance → AKShare (`ak.stock_news_em`，东方财富新闻)
-   - 美股新闻: 无免费API，依赖WebSearch补充
+2. **fetcher.py — 美股行情增强 + 港股路由**
+   - 美股：Finnhub 今日行情为主，Yahoo 回填历史 K 线（修复 Finnhub `volume=0` 导致成交量异动检测失效），今日成交量用 Yahoo 补全
+   - 港股：识别 4-5 位数字代码，路由到 Yahoo chart
 
-3. **config.py**
-   - 新增 `MARKET_FUTURES` 市场常量
-   - `detect_market()` 支持期货合约代码识别 (如 `SHFE.cu2501`)
+3. **报告**
+   - 新增「美股/港股基本面」表格
+   - `models.py` 新增 `GlobalStockBasicInfo`，`ReportData` 新增 `global_basics`
+   - 市场概览新增「港股」分组
 
-4. **pyproject.toml**
-   - 移除 `yfinance>=0.2.0`
-   - 添加 `akshare>=1.14.0`, `tqsdk>=3.0.0`
+4. **news.py**
+   - 港股新闻并入「无免费 API → WebSearch 补充」路径
 
-5. **config.yaml**
-   - 新增期货watchlist条目
-   - 新增 `tqsdk` 配置段 (username/password)
+### v0.6.0 - A股数据增强
 
-#### 迁移原因
+集成 [a-stock-data](https://github.com/simonlin1212/a-stock-data) skill 思路，新增 A股基本面 + 价格兜底。
 
-- AKShare提供更准确的A股数据（成交额、涨跌幅直接提供）
-- Finnhub美股数据更稳定，提供精确涨跌幅
-- TqSdk是中国期货行业标准数据源
+#### 变更内容
+
+1. **新增 `src/astock.py`**
+   - 腾讯财经基本面: PE(TTM)/PE(静)/PB/总市值/流通市值/换手率/量比/涨停跌停价（GBK 直连，无需 key，不封 IP）
+   - mootdx 通达信日 K 线兜底（TCP 不封 IP），涨跌幅按前收盘价计算
+   - 腾讯字段索引已校准（43=振幅 非 PB，PB 在 46）
+
+2. **fetcher.py**
+   - A股历史行情改为「AKShare 主 + mootdx 兜底」：AKShare 限流/返回空时自动切换 mootdx
+
+3. **报告**
+   - 每日报告新增「A股基本面」表格（现价/涨跌幅/PE/PB/总市值/换手率/量比）
+   - `models.py` 新增 `AShareBasicInfo`，`ReportData` 新增 `a_share_basics`
+
+4. **依赖**
+   - 新增 `mootdx>=0.10`
+   - `httpx` 下限放宽到 `>=0.25.0`（与 mootdx 兼容）
+
+### v0.5.0 - 聚焦股票，移除期货
+
+**重大变更**: 移除期货 (TqSdk) 数据源，系统专注于A股 + 美股
+
+#### 变更内容
+
+1. **移除期货支持**
+   - 删除 TqSdk 数据源及 `_normalize_tqsdk_df` 等相关代码
+   - 移除 `MARKET_FUTURES` 市场常量及期货合约识别
+   - 移除 watchlist 中的期货条目和 `tqsdk` 配置段
+   - 移除 `tqsdk>=3.0.0` 依赖
+
+2. **美股涨跌幅修正 (fetcher.py)**
+   - 从本地历史构建行情时，涨跌幅改为按"前一交易日收盘价"重算
+   - 修正 Stooq 仅提供盘中 (开盘→收盘) 涨跌幅导致的异动误判
+   - 口径与A股一致，使美股异动检测在累积≥2天数据后正常工作
 
 #### 注意事项
 
 - A股数据使用AKShare，国内网络直连无需代理
 - 美股数据使用Finnhub，需要设置 `FINNHUB_API_KEY` 环境变量
-- 期货数据使用TqSdk，需要注册天勤账号并填写到config.yaml
 - 部分A股可能因AKShare限流而获取失败，属正常现象
 
 ## 项目结构
@@ -259,7 +261,9 @@ stock-monitor/
 ├── src/
 │   ├── config.py        # 配置加载
 │   ├── models.py        # 数据模型
-│   ├── fetcher.py       # 数据获取 (AKShare + Finnhub + TqSdk)
+│   ├── fetcher.py       # 数据获取 (AKShare + Finnhub + Stooq)
+│   ├── astock.py        # A股增强 (腾讯财经基本面 + mootdx 兜底)
+│   ├── global_stock.py  # 美股/港股增强 (Yahoo K线 + 基本面)
 │   ├── anomaly.py       # 异动检测
 │   ├── news.py          # 新闻获取 (AKShare)
 │   ├── llm.py           # LLM接口

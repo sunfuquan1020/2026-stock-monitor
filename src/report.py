@@ -30,6 +30,8 @@ def generate_report(data: ReportData, template_dir: str) -> str:
         anomalies=data.anomalies,
         analyses=data.analyses,
         hypothesis_updates=data.hypothesis_updates,
+        a_share_basics=data.a_share_basics,
+        global_basics=data.global_basics,
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 

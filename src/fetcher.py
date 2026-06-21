@@ -1,10 +1,10 @@
 """多市场数据获取模块。
 
 数据源:
-- A股: AKShare (主要)
-- 美股: Finnhub (主要，需FINNHUB_API_KEY) + Stooq (备用)
-- 期货: TqSdk (需天勤账号)
-- 本地历史: output/us_quote_history.json 累积每日数据用于异动检测
+- A股: AKShare (主) + mootdx 通达信兜底
+- 美股: Finnhub (主, 需FINNHUB_API_KEY) + Stooq (备), Yahoo 回填历史K线(含真实成交量)
+- 港股: Yahoo Finance chart (唯一日K线源)
+- 本地历史: output/us_quote_history.json 累积美股/港股每日数据用于异动检测
 
 用法:
     quotes = fetch_daily_quotes(symbols, days=30, market_map={"AAPL": "美股", "000001": "A股"})
@@ -23,7 +23,11 @@ import akshare as ak
 import httpx
 import pandas as pd
 
-from src.config import MARKET_A_SHARE, MARKET_FUTURES, MARKET_US, detect_market
+from dataclasses import replace
+
+from src.astock import fetch_a_share_kline_mootdx
+from src.config import MARKET_A_SHARE, MARKET_HK, detect_market
+from src.global_stock import fetch_kline_yahoo
 from src.models import DailyQuote
 
 logger = logging.getLogger(__name__)
@@ -43,16 +47,12 @@ REQUEST_DELAY = 1.0
 DEFAULT_HISTORY_DIR = "output"
 HISTORY_FILENAME = "us_quote_history.json"
 
-# 期货历史数据文件
-FUTURES_HISTORY_FILENAME = "futures_quote_history.json"
-
 
 def fetch_daily_quotes(
     symbols: list[str],
     days: int = 30,
     market_map: dict[str, str] | None = None,
     output_dir: str = DEFAULT_HISTORY_DIR,
-    futures_config: dict | None = None,
 ) -> dict[str, list[DailyQuote]]:
     """获取多市场历史日线数据。
 
@@ -61,7 +61,6 @@ def fetch_daily_quotes(
         days: 获取天数
         market_map: 股票代码到市场的映射，未提供则自动检测
         output_dir: 输出目录（用于本地历史文件）
-        futures_config: 期货配置 (tqsdk用户名/密码)
 
     Returns:
         字典，key为股票代码，value为DailyQuote列表（按日期升序）
@@ -72,34 +71,31 @@ def fetch_daily_quotes(
     if market_map is None:
         market_map = {s: detect_market(s) for s in symbols}
 
-    # 按市场分组
+    # 按市场分组 (A股 / 港股 / 其余按美股处理)
     a_share_symbols = []
+    hk_symbols = []
     us_symbols = []
-    futures_symbols = []
     for symbol in symbols:
         market = market_map.get(symbol, detect_market(symbol))
         if market == MARKET_A_SHARE:
             a_share_symbols.append(symbol)
-        elif market == MARKET_FUTURES:
-            futures_symbols.append(symbol)
+        elif market == MARKET_HK:
+            hk_symbols.append(symbol)
         else:
             us_symbols.append(symbol)
 
     result = {}
 
-    # 加载本地历史数据
+    # 加载本地历史数据 (美股 + 港股共用)
     us_history_path = str(Path(output_dir) / HISTORY_FILENAME)
     us_history = _load_local_history(us_history_path)
 
-    futures_history_path = str(Path(output_dir) / FUTURES_HISTORY_FILENAME)
-    futures_history = _load_local_history(futures_history_path)
-
-    # 获取A股数据 (AKShare)
+    # 获取A股数据 (AKShare 主 + mootdx 兜底)
     if a_share_symbols:
         a_share_data = _fetch_a_share_batch(a_share_symbols, start_date, end_date)
         result.update(a_share_data)
 
-    # 获取美股数据 (Finnhub主 + Stooq备)
+    # 获取美股数据 (Finnhub主 + Stooq备 + Yahoo回填历史)
     for i, symbol in enumerate(us_symbols):
         if i > 0:
             time.sleep(REQUEST_DELAY)
@@ -113,17 +109,22 @@ def fetch_daily_quotes(
         except Exception as e:
             logger.error(f"Failed to fetch data for {symbol} (美股): {e}")
 
-    # 保存更新后的美股历史
-    _save_local_history(us_history_path, us_history)
+    # 获取港股数据 (Yahoo chart)
+    for i, symbol in enumerate(hk_symbols):
+        if i > 0:
+            time.sleep(REQUEST_DELAY)
 
-    # 获取期货数据 (TqSdk)
-    if futures_symbols:
-        futures_data = _fetch_futures_batch(
-            futures_symbols, start_date, end_date,
-            futures_history, futures_config,
-        )
-        result.update(futures_data)
-        _save_local_history(futures_history_path, futures_history)
+        try:
+            quotes = _fetch_hk_symbol(symbol, start_date, end_date, us_history)
+            if quotes:
+                result[symbol] = quotes
+            else:
+                logger.warning(f"No data returned for {symbol} (港股)")
+        except Exception as e:
+            logger.error(f"Failed to fetch data for {symbol} (港股): {e}")
+
+    # 保存更新后的美股/港股历史
+    _save_local_history(us_history_path, us_history)
 
     return result
 
@@ -154,6 +155,21 @@ def _fetch_a_share_batch(
 
 
 def _fetch_a_share_symbol(
+    symbol: str, start_date: date, end_date: date
+) -> list[DailyQuote]:
+    """获取单只A股历史数据。AKShare为主，限流/失败时用 mootdx 兜底。"""
+    quotes = _fetch_a_share_akshare(symbol, start_date, end_date)
+    if quotes:
+        return quotes
+
+    # AKShare 失败 (常见为限流) -> mootdx 通达信兜底，不封IP
+    bars = (end_date - start_date).days + 5
+    logger.info(f"AKShare 无数据，尝试 mootdx 兜底: {symbol}")
+    fallback = fetch_a_share_kline_mootdx(symbol, bars=bars)
+    return [q for q in fallback if start_date <= q.date <= end_date]
+
+
+def _fetch_a_share_akshare(
     symbol: str, start_date: date, end_date: date
 ) -> list[DailyQuote]:
     """通过AKShare获取单只A股历史数据，带重试逻辑。"""
@@ -241,27 +257,60 @@ def _fetch_us_symbol(
     end_date: date,
     history: dict[str, list[dict]],
 ) -> list[DailyQuote]:
-    """获取美股数据。Finnhub为主，Stooq为备，合并本地历史。"""
-    # Step 1: 获取今日行情 (Finnhub优先)
+    """获取美股数据。Finnhub为主(今日行情)，Yahoo回填历史K线(含真实成交量)。"""
+    # Step 1: Yahoo 历史K线 (含真实成交量), 用于回填本地历史
+    yahoo_hist = fetch_kline_yahoo(symbol, market="美股", range_="6mo")
+
+    # Step 2: 今日行情 Finnhub 为主, Stooq 备
     today_quote = _fetch_us_finnhub(symbol)
     if not today_quote:
         logger.info(f"Finnhub failed for {symbol}, trying Stooq...")
         today_quote = _fetch_us_stooq_latest(symbol)
 
+    # Finnhub quote 不含成交量, 用 Yahoo 当日成交量补全
     if today_quote:
-        _update_history(history, symbol, today_quote[0])
+        tq = today_quote[0]
+        if tq.volume == 0:
+            same_day = next((y for y in yahoo_hist if y.date == tq.date), None)
+            if same_day and same_day.volume:
+                tq = replace(tq, volume=same_day.volume)
+        _update_history(history, symbol, tq)  # 今日以 Finnhub 为准, 优先写入
 
-    # Step 2: 从本地历史获取足够数据
+    # Step 3: Yahoo 历史回填 (仅补缺失日期, 不覆盖今日的 Finnhub 数据)
+    for q in yahoo_hist:
+        _update_history(history, symbol, q)
+
+    # Step 4: 从本地历史获取范围内数据
     historical = _get_history_quotes(symbol, start_date, end_date, history)
-
     if historical:
         return historical
 
-    # Step 3: 如果没有历史数据，至少返回今日行情
     if today_quote:
         return today_quote
 
     logger.warning(f"All US data sources failed for {symbol}")
+    return []
+
+
+def _fetch_hk_symbol(
+    symbol: str,
+    start_date: date,
+    end_date: date,
+    history: dict[str, list[dict]],
+) -> list[DailyQuote]:
+    """获取港股数据。Yahoo chart 为唯一日K线源，合并本地历史。"""
+    yahoo_hist = fetch_kline_yahoo(symbol, market=MARKET_HK, range_="6mo")
+    for q in yahoo_hist:
+        _update_history(history, symbol, q)
+
+    historical = _get_history_quotes(symbol, start_date, end_date, history)
+    if historical:
+        return historical
+
+    if yahoo_hist:
+        return [q for q in yahoo_hist if start_date <= q.date <= end_date]
+
+    logger.warning(f"All HK data sources failed for {symbol}")
     return []
 
 
@@ -362,125 +411,6 @@ def _fetch_us_stooq_latest(symbol: str) -> list[DailyQuote]:
         return []
 
 
-# ── 期货: TqSdk ───────────────────────────────────────────────
-def _fetch_futures_batch(
-    symbols: list[str],
-    start_date: date,
-    end_date: date,
-    history: dict[str, list[dict]],
-    futures_config: dict | None = None,
-) -> dict[str, list[DailyQuote]]:
-    """批量获取期货日线数据，使用TqSdk。
-
-    Args:
-        symbols: 期货合约代码列表 (如 "SHFE.cu2501")
-        start_date: 开始日期
-        end_date: 结束日期
-        history: 本地历史数据
-        futures_config: 期货配置 (tqsdk用户名/密码)
-
-    Returns:
-        字典，key为合约代码，value为DailyQuote列表
-    """
-    if not futures_config:
-        logger.warning("No futures config provided, skipping futures data")
-        return {}
-
-    username = futures_config.get("username", "")
-    password = futures_config.get("password", "")
-    if not username or not password:
-        logger.warning("TqSdk username/password not configured, skipping futures")
-        return {}
-
-    result = {}
-
-    try:
-        from tqsdk import TqApi, TqAuth
-
-        api = TqApi(auth=TqAuth(username, password))
-
-        for symbol in symbols:
-            try:
-                # 计算需要获取的K线根数
-                days_count = (end_date - start_date).days + 10
-
-                # 获取日K线数据 (86400秒 = 1天)
-                klines = api.get_kline_serial(symbol, 86400, days_count)
-
-                if klines is not None and not klines.empty:
-                    quotes = _normalize_tqsdk_df(klines, symbol)
-                    if quotes:
-                        result[symbol] = quotes
-                        # 更新本地历史
-                        for q in quotes:
-                            _update_history(history, symbol, q)
-                else:
-                    logger.warning(f"No futures data returned for {symbol}")
-
-            except Exception as e:
-                logger.error(f"Failed to fetch futures data for {symbol}: {e}")
-
-        api.close()
-
-    except ImportError:
-        logger.error("tqsdk not installed. Install with: pip install tqsdk")
-    except Exception as e:
-        logger.error(f"TqSdk connection failed: {e}")
-
-    return result
-
-
-def _normalize_tqsdk_df(df: pd.DataFrame, symbol: str) -> list[DailyQuote]:
-    """将TqSdk K线DataFrame转换为DailyQuote列表。
-
-    TqSdk返回列: datetime, open, high, low, close, volume, open_oi, close_oi
-    datetime为毫秒时间戳。
-    """
-    quotes = []
-    for _, row in df.iterrows():
-        try:
-            # datetime为纳秒时间戳 (pandas Timestamp)
-            ts = row.get("datetime")
-            if ts is None:
-                continue
-
-            # TqSdk的datetime是纳秒级时间戳
-            if isinstance(ts, (int, float)):
-                quote_date = pd.Timestamp(ts, unit="ns").date()
-            else:
-                quote_date = pd.Timestamp(ts).date()
-
-            open_price = float(row.get("open", 0))
-            close_price = float(row.get("close", 0))
-            high_price = float(row.get("high", 0))
-            low_price = float(row.get("low", 0))
-            volume_val = int(row.get("volume", 0))
-
-            if close_price == 0:
-                continue
-
-            # 计算涨跌幅 (近似，基于开盘价)
-            change_pct = 0.0
-            if open_price > 0:
-                change_pct = (close_price - open_price) / open_price * 100
-
-            quotes.append(DailyQuote(
-                symbol=symbol,
-                date=quote_date,
-                open=open_price,
-                close=close_price,
-                high=high_price,
-                low=low_price,
-                volume=volume_val,
-                turnover=0.0,
-                change_pct=round(change_pct, 4),
-            ))
-        except (ValueError, TypeError, KeyError) as e:
-            logger.warning(f"Failed to parse TqSdk row for {symbol}: {e}")
-
-    return sorted(quotes, key=lambda q: q.date)
-
-
 # ── 本地历史数据管理 ───────────────────────────────────────────
 def _load_local_history(path: str) -> dict[str, list[dict]]:
     """加载本地历史数据。"""
@@ -540,30 +470,49 @@ def _get_history_quotes(
     end_date: date,
     history: dict[str, list[dict]],
 ) -> list[DailyQuote]:
-    """从本地历史中提取指定日期范围的行情数据。"""
+    """从本地历史中提取指定日期范围的行情数据。
+
+    涨跌幅按"较前一交易日收盘价"重新计算，使美股口径与A股一致，
+    并修正Stooq仅提供盘中(开盘到收盘)涨跌幅的问题。先用全量历史
+    计算前收，再按日期范围过滤。
+    """
     if symbol not in history:
         return []
 
+    # 先按日期升序排列全量历史，确保前收盘价取自真正的前一交易日
+    entries = sorted(history[symbol], key=lambda x: x.get("date", ""))
+
     quotes = []
-    for entry in history[symbol]:
+    prev_close: float | None = None
+    for entry in entries:
         try:
             entry_date = date.fromisoformat(entry["date"])
+            close_price = float(entry.get("close", 0))
+
+            # 优先用前收盘价计算日涨跌幅，无前收时回退到存储值
+            if prev_close and prev_close > 0:
+                change_pct = (close_price - prev_close) / prev_close * 100
+            else:
+                change_pct = float(entry.get("change_pct", 0))
+
             if start_date <= entry_date <= end_date:
                 quotes.append(DailyQuote(
                     symbol=symbol,
                     date=entry_date,
                     open=float(entry.get("open", 0)),
-                    close=float(entry.get("close", 0)),
+                    close=close_price,
                     high=float(entry.get("high", 0)),
                     low=float(entry.get("low", 0)),
                     volume=int(entry.get("volume", 0)),
                     turnover=0.0,
-                    change_pct=float(entry.get("change_pct", 0)),
+                    change_pct=round(change_pct, 4),
                 ))
+
+            prev_close = close_price
         except (ValueError, KeyError) as e:
             logger.warning(f"Failed to parse history entry for {symbol}: {e}")
 
-    return sorted(quotes, key=lambda q: q.date)
+    return quotes
 
 
 # ── 日期解析 ──────────────────────────────────────────────────

@@ -7,8 +7,10 @@ from datetime import date
 from pathlib import Path
 
 from src.anomaly import detect_anomalies
-from src.config import MARKET_FUTURES, get_hypotheses, get_thresholds, get_watchlist, load_config
+from src.astock import fetch_a_share_basics
+from src.config import MARKET_HK, get_hypotheses, get_thresholds, get_watchlist, load_config
 from src.fetcher import fetch_daily_quotes
+from src.global_stock import fetch_global_basics
 from src.hypothesis import check_hypotheses, save_hypothesis_history
 from src.llm import LLMProvider, create_provider
 from src.models import AnalysisResult, ReportData, StockConfig
@@ -47,25 +49,46 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
     # 按市场分组统计
     a_share_count = sum(1 for s in watchlist if s.market == "A股")
     us_count = sum(1 for s in watchlist if s.market == "美股")
-    futures_count = sum(1 for s in watchlist if s.market == MARKET_FUTURES)
+    hk_count = sum(1 for s in watchlist if s.market == MARKET_HK)
     logger.info(
         f"Monitoring {len(symbols)} symbols: A股 {a_share_count}只, "
-        f"美股 {us_count}只, 期货 {futures_count}只"
+        f"美股 {us_count}只, 港股 {hk_count}只"
     )
 
-    # Step 1: 获取行情数据（多市场）
-    logger.info("Fetching daily quotes (multi-market)...")
-    futures_config = config.get("tqsdk", {})
+    # Step 1: 获取行情数据（A股 + 美股）
+    logger.info("Fetching daily quotes (A股 + 美股)...")
     quotes = fetch_daily_quotes(
         symbols, days=thresholds.lookback_days,
         market_map=market_map, output_dir=output_dir,
-        futures_config=futures_config,
     )
 
     a_share_data = sum(1 for s in quotes if market_map.get(s) == "A股")
     us_data = sum(1 for s in quotes if market_map.get(s) == "美股")
-    futures_data = sum(1 for s in quotes if market_map.get(s) == MARKET_FUTURES)
-    logger.info(f"Got data for {len(quotes)} symbols (A股: {a_share_data}, 美股: {us_data}, 期货: {futures_data})")
+    hk_data = sum(1 for s in quotes if market_map.get(s) == MARKET_HK)
+    logger.info(f"Got data for {len(quotes)} symbols (A股: {a_share_data}, 美股: {us_data}, 港股: {hk_data})")
+
+    # Step 1b: 获取A股基本面快照 (腾讯财经: PE/PB/市值/换手率)
+    a_share_symbols = [s.symbol for s in watchlist if s.market == "A股"]
+    a_share_basics = []
+    if a_share_symbols:
+        logger.info(f"Fetching A股 basics for {len(a_share_symbols)} symbols...")
+        basics_map = fetch_a_share_basics(a_share_symbols)
+        # 按 watchlist 顺序排列
+        a_share_basics = [basics_map[s] for s in a_share_symbols if s in basics_map]
+        logger.info(f"Got basics for {len(a_share_basics)} A股")
+
+    # Step 1c: 获取美股/港股基本面 (Yahoo: PE/PB/PEG/市值/ROE/目标价)
+    global_items = [
+        (s.symbol, s.name, s.market)
+        for s in watchlist
+        if s.market in ("美股", MARKET_HK)
+    ]
+    global_basics = []
+    if global_items:
+        logger.info(f"Fetching 美股/港股 basics for {len(global_items)} symbols...")
+        gmap = fetch_global_basics(global_items)
+        global_basics = [gmap[sym] for sym, _, _ in global_items if sym in gmap]
+        logger.info(f"Got basics for {len(global_basics)} 美股/港股")
 
     # Step 2: 检测异动
     logger.info("Detecting anomalies...")
@@ -143,6 +166,8 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
         analyses=tuple(analyses),
         hypothesis_updates=tuple(hypothesis_updates),
         market_summary=market_summary,
+        a_share_basics=tuple(a_share_basics),
+        global_basics=tuple(global_basics),
     )
 
     template_dir = str(Path(__file__).parent.parent / "templates")
@@ -181,7 +206,7 @@ def _build_market_summary(
     # 按市场分组
     a_share_lines = []
     us_lines = []
-    futures_lines = []
+    hk_lines = []
 
     for symbol, daily_quotes in quotes.items():
         if not daily_quotes:
@@ -194,8 +219,8 @@ def _build_market_summary(
 
         if market == "美股":
             us_lines.append(line)
-        elif market == MARKET_FUTURES:
-            futures_lines.append(line)
+        elif market == MARKET_HK:
+            hk_lines.append(line)
         else:
             a_share_lines.append(line)
 
@@ -204,8 +229,8 @@ def _build_market_summary(
         sections.append("### A股\n" + "\n".join(a_share_lines))
     if us_lines:
         sections.append("### 美股\n" + "\n".join(us_lines))
-    if futures_lines:
-        sections.append("### 期货\n" + "\n".join(futures_lines))
+    if hk_lines:
+        sections.append("### 港股\n" + "\n".join(hk_lines))
 
     return "\n\n".join(sections) if sections else "无可用数据"
 

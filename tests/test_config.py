@@ -11,7 +11,6 @@ from src.config import (
     get_watchlist,
     load_config,
     MARKET_A_SHARE,
-    MARKET_FUTURES,
     MARKET_US,
     MARKET_HK,
 )
@@ -62,10 +61,10 @@ watchlist:
     name: "苹果"
     sector: "消费电子"
     market: "美股"
-  - symbol: "SHFE.cu2507"
-    name: "沪铜2507"
-    sector: "工业金属期货"
-    market: "期货"
+  - symbol: "600519"
+    name: "贵州茅台"
+    sector: "白酒"
+    market: "A股"
 
 thresholds:
   price_change_pct: 5.0
@@ -147,7 +146,7 @@ class TestGetWatchlist:
         assert watchlist[0].market == "A股"
         assert watchlist[1].market == "美股"
         assert watchlist[2].market == "美股"
-        assert watchlist[3].market == "期货"
+        assert watchlist[3].market == "A股"
 
 
 class TestDetectMarket:
@@ -174,22 +173,6 @@ class TestDetectMarket:
     def test_hk_stock(self):
         assert detect_market("00700") == MARKET_HK
         assert detect_market("9988") == MARKET_HK
-
-    def test_futures_shfe(self):
-        assert detect_market("SHFE.cu2501") == MARKET_FUTURES
-        assert detect_market("SHFE.au2508") == MARKET_FUTURES
-
-    def test_futures_cffex(self):
-        assert detect_market("CFFEX.IF2506") == MARKET_FUTURES
-
-    def test_futures_dce(self):
-        assert detect_market("DCE.i2509") == MARKET_FUTURES
-
-    def test_futures_czce(self):
-        assert detect_market("CZCE.MA509") == MARKET_FUTURES
-
-    def test_futures_ine(self):
-        assert detect_market("INE.sc2507") == MARKET_FUTURES
 
 
 class TestGetThresholds:

@@ -1,5 +1,5 @@
-# 多市场每日监控系统配置
-# 数据源: A股=AKShare, 美股=Finnhub(主)+Stooq(备), 期货=TqSdk, 辅助=WebSearch
+# 股票每日监控系统配置
+# 数据源: A股=AKShare, 美股=Finnhub(主)+Stooq(备), 辅助=WebSearch
 
 # 自选股列表（A股 + 美股，按行业分组）
 watchlist:
@@ -246,51 +246,6 @@ watchlist:
     sector: "能源与资源"
     market: "美股"
 
-  # ═══════════════════════════════════════════════════
-  # 期货 (TqSdk 天勤量化)
-  # ═══════════════════════════════════════════════════
-  # 交易所前缀: SHFE(上期所), DCE(大商所), CZCE(郑商所), CFFEX(中金所), INE(能源中心)
-  - symbol: "SHFE.au2508"
-    name: "沪金2508"
-    sector: "贵金属期货"
-    market: "期货"
-  - symbol: "SHFE.ag2508"
-    name: "沪银2508"
-    sector: "贵金属期货"
-    market: "期货"
-  - symbol: "SHFE.cu2507"
-    name: "沪铜2507"
-    sector: "工业金属期货"
-    market: "期货"
-  - symbol: "SHFE.rb2510"
-    name: "螺纹钢2510"
-    sector: "黑色系期货"
-    market: "期货"
-  - symbol: "CFFEX.IF2506"
-    name: "沪深300股指2506"
-    sector: "股指期货"
-    market: "期货"
-  - symbol: "CZCE.MA509"
-    name: "甲醇509"
-    sector: "化工期货"
-    market: "期货"
-  - symbol: "DCE.i2509"
-    name: "铁矿石2509"
-    sector: "黑色系期货"
-    market: "期货"
-  - symbol: "INE.sc2507"
-    name: "原油2507"
-    sector: "能源期货"
-    market: "期货"
-  - symbol: "CZCE.TA609"
-    name: "PTA主力"
-    sector: "化工期货"
-    market: "期货"
-  - symbol: "GFEX.LC607"
-    name: "碳酸锂主力"
-    sector: "新能源期货"
-    market: "期货"
-
 # 异动检测阈值
 thresholds:
   price_change_pct: 5.0       # 日涨跌幅超过此值触发
@@ -352,12 +307,6 @@ nvidia:
   #   "meta/llama-3.1-405b-instruct"         最强开源
   #   "nvidia/nemotron-4-340b-instruct"       NVIDIA自研
   #   "deepseek/deepseek-r1"                  推理模型
-
-# TqSdk天勤量化设置（期货数据源）
-# 注册: https://www.shinnytech.com/tianqin  获取账号密码
-tqsdk:
-  username: ""  # TODO: 填写天勤账号
-  password: ""  # TODO: 填写天勤密码
 
 # 输出设置
 output:

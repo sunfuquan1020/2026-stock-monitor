@@ -10,12 +10,11 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from src.config import MARKET_A_SHARE, MARKET_FUTURES, MARKET_US
+from src.config import MARKET_A_SHARE, MARKET_HK, MARKET_US
 from src.fetcher import (
     _get_history_quotes,
     _load_local_history,
     _normalize_akshare_df,
-    _normalize_tqsdk_df,
     _parse_akshare_date,
     _parse_stooq_date,
     _save_local_history,
@@ -44,25 +43,6 @@ def make_akshare_df(rows: int = 5) -> pd.DataFrame:
             "涨跌幅": 0.5 + i * 0.1,
             "涨跌额": 0.05,
             "换手率": 0.5,
-        })
-    return pd.DataFrame(data)
-
-
-def make_tqsdk_df(rows: int = 5) -> pd.DataFrame:
-    """构造TqSdk K线返回格式的DataFrame。"""
-    base_date = pd.Timestamp("2026-05-15")
-    data = []
-    for i in range(rows):
-        ts = base_date + timedelta(days=i)
-        data.append({
-            "datetime": ts.value,  # 纳秒时间戳
-            "open": 100.0 + i * 1.0,
-            "high": 105.0 + i * 1.0,
-            "low": 95.0 + i * 1.0,
-            "close": 101.0 + i * 1.0,
-            "volume": 50000 + i * 1000,
-            "open_oi": 100000,
-            "close_oi": 100000,
         })
     return pd.DataFrame(data)
 
@@ -118,35 +98,6 @@ class TestNormalizeAkshareDf:
         df = make_akshare_df(1)
         quotes = _normalize_akshare_df(df, "000001")
         assert quotes[0].change_pct == pytest.approx(0.5)
-
-
-class TestNormalizeTqsdkDf:
-    def test_normalizes_futures_data(self):
-        df = make_tqsdk_df(3)
-        quotes = _normalize_tqsdk_df(df, "SHFE.cu2507")
-        assert len(quotes) == 3
-        assert quotes[0].symbol == "SHFE.cu2507"
-        assert quotes[0].date == date(2026, 5, 15)
-        assert quotes[0].open == pytest.approx(100.0)
-        assert quotes[0].close == pytest.approx(101.0)
-
-    def test_sorted_by_date(self):
-        df = make_tqsdk_df(5)
-        df = df.iloc[::-1].reset_index(drop=True)
-        quotes = _normalize_tqsdk_df(df, "SHFE.cu2507")
-        dates = [q.date for q in quotes]
-        assert dates == sorted(dates)
-
-    def test_empty_df(self):
-        df = pd.DataFrame()
-        quotes = _normalize_tqsdk_df(df, "SHFE.cu2507")
-        assert quotes == []
-
-    def test_skips_zero_close(self):
-        df = make_tqsdk_df(2)
-        df.loc[0, "close"] = 0
-        quotes = _normalize_tqsdk_df(df, "SHFE.cu2507")
-        assert len(quotes) == 1
 
 
 class TestParseAkshareDate:
@@ -218,6 +169,30 @@ class TestLocalHistory:
     def test_get_history_quotes_empty(self):
         assert _get_history_quotes("AAPL", date(2026, 5, 1), date(2026, 5, 22), {}) == []
 
+    def test_get_history_quotes_recomputes_change_pct_day_over_day(self):
+        # 涨跌幅应按前一交易日收盘价重算，而非沿用存储的盘中涨跌幅
+        history = {"AAPL": [
+            {"date": "2026-05-20", "open": 100, "close": 100, "high": 101, "low": 99, "volume": 1, "change_pct": 9.0},
+            {"date": "2026-05-21", "open": 100, "close": 110, "high": 111, "low": 99, "volume": 1, "change_pct": 9.0},
+        ]}
+        quotes = _get_history_quotes("AAPL", date(2026, 5, 1), date(2026, 5, 25), history)
+        assert len(quotes) == 2
+        # 第一天无前收，回退到存储值
+        assert quotes[0].change_pct == pytest.approx(9.0)
+        # 第二天: (110 - 100) / 100 * 100 = 10.0
+        assert quotes[1].change_pct == pytest.approx(10.0)
+
+    def test_get_history_quotes_uses_prev_close_outside_window(self):
+        # 窗口外的前一日也应作为前收，使窗口首日涨跌幅正确
+        history = {"AAPL": [
+            {"date": "2026-05-09", "open": 100, "close": 200, "high": 201, "low": 99, "volume": 1, "change_pct": 0.0},
+            {"date": "2026-05-15", "open": 200, "close": 220, "high": 221, "low": 199, "volume": 1, "change_pct": 0.0},
+        ]}
+        quotes = _get_history_quotes("AAPL", date(2026, 5, 10), date(2026, 5, 25), history)
+        assert len(quotes) == 1
+        # (220 - 200) / 200 * 100 = 10.0，前收取自窗口外的 05-09
+        assert quotes[0].change_pct == pytest.approx(10.0)
+
 
 class TestFetchDailyQuotes:
     @patch("src.fetcher.ak")
@@ -239,7 +214,8 @@ class TestFetchDailyQuotes:
         mock_resp.raise_for_status = MagicMock()
         mock_httpx.get.return_value = mock_resp
 
-        with patch.dict("os.environ", {"FINNHUB_API_KEY": "test-key"}):
+        with patch.dict("os.environ", {"FINNHUB_API_KEY": "test-key"}), \
+                patch("src.fetcher.fetch_kline_yahoo", return_value=[]):
             result = fetch_daily_quotes(
                 ["AAPL"], days=30,
                 market_map={"AAPL": "美股"}, output_dir=str(tmp_path),
@@ -259,7 +235,8 @@ class TestFetchDailyQuotes:
         with patch.dict("os.environ", {}, clear=True):
             env = os.environ.copy()
             env.pop("FINNHUB_API_KEY", None)
-            with patch("os.environ", env):
+            with patch("os.environ", env), \
+                    patch("src.fetcher.fetch_kline_yahoo", return_value=[]):
                 result = fetch_daily_quotes(
                     ["AAPL"], days=30,
                     market_map={"AAPL": "美股"}, output_dir=str(tmp_path),
@@ -282,7 +259,8 @@ class TestFetchDailyQuotes:
         mock_resp.raise_for_status = MagicMock()
         mock_httpx.get.return_value = mock_resp
 
-        with patch.dict("os.environ", {"FINNHUB_API_KEY": "test-key"}):
+        with patch.dict("os.environ", {"FINNHUB_API_KEY": "test-key"}), \
+                patch("src.fetcher.fetch_kline_yahoo", return_value=[]):
             result = fetch_daily_quotes(
                 ["AAPL"], days=30,
                 market_map={"AAPL": "美股"}, output_dir=str(tmp_path),
@@ -291,7 +269,9 @@ class TestFetchDailyQuotes:
             assert len(result["AAPL"]) == 3
 
     def test_empty_when_all_fail(self, tmp_path):
-        with patch("src.fetcher.ak") as mock_ak:
+        # AKShare 空 + mootdx 兜底也空 -> 结果为空
+        with patch("src.fetcher.ak") as mock_ak, \
+                patch("src.fetcher.fetch_a_share_kline_mootdx", return_value=[]):
             mock_ak.stock_zh_a_hist.return_value = pd.DataFrame()
             result = fetch_daily_quotes(
                 ["000001"], days=30,
@@ -306,17 +286,50 @@ class TestFetchDailyQuotes:
         assert "600519" in result
         mock_ak.stock_zh_a_hist.assert_called_once()
 
-    def test_futures_skipped_without_config(self, tmp_path):
-        result = fetch_daily_quotes(
-            ["SHFE.cu2507"], days=30,
-            market_map={"SHFE.cu2507": "期货"}, output_dir=str(tmp_path),
-        )
-        assert result == {}
+    def test_hk_symbol_routed_to_yahoo(self, tmp_path):
+        # 港股代码应路由到 Yahoo chart
+        hk_quotes = [make_us_quote(symbol="00700", d=date(2026, 6, 18), change_pct=0.5)]
+        with patch("src.fetcher.fetch_kline_yahoo", return_value=hk_quotes) as mock_yahoo:
+            result = fetch_daily_quotes(
+                ["00700"], days=30,
+                market_map={"00700": MARKET_HK}, output_dir=str(tmp_path),
+            )
+            mock_yahoo.assert_called_once()
+            # 确认按港股市场调用
+            assert mock_yahoo.call_args.kwargs.get("market") == MARKET_HK
+            assert "00700" in result
 
-    def test_futures_skipped_without_credentials(self, tmp_path):
-        result = fetch_daily_quotes(
-            ["SHFE.cu2507"], days=30,
-            market_map={"SHFE.cu2507": "期货"}, output_dir=str(tmp_path),
-            futures_config={"username": "", "password": ""},
-        )
-        assert result == {}
+    def test_us_backfills_volume_from_yahoo(self, tmp_path):
+        # Finnhub volume=0 时, 用 Yahoo 当日成交量补全
+        from datetime import date as _date
+        today = _date.today()
+        yahoo_today = [make_us_quote(symbol="AAPL", d=today, change_pct=1.0)]  # volume=43608864
+        finnhub_resp = MagicMock()
+        finnhub_resp.json.return_value = {"c": 308.82, "o": 306.12, "h": 311.4, "l": 305.84, "pc": 304.99, "dp": 1.26}
+        finnhub_resp.raise_for_status = MagicMock()
+        with patch("src.fetcher.httpx") as mock_httpx, \
+                patch("src.fetcher.fetch_kline_yahoo", return_value=yahoo_today), \
+                patch.dict("os.environ", {"FINNHUB_API_KEY": "test-key"}):
+            mock_httpx.get.return_value = finnhub_resp
+            result = fetch_daily_quotes(
+                ["AAPL"], days=30,
+                market_map={"AAPL": "美股"}, output_dir=str(tmp_path),
+            )
+            today_q = [q for q in result["AAPL"] if q.date == today][0]
+            assert today_q.close == pytest.approx(308.82)  # 价格来自 Finnhub
+            assert today_q.volume == 43608864              # 成交量补自 Yahoo
+
+    def test_mootdx_fallback_used_when_akshare_empty(self, tmp_path):
+        # AKShare 返回空时，应改用 mootdx 兜底的数据
+        fallback_quotes = [make_us_quote(symbol="600519", d=date(2026, 6, 18), change_pct=0.0)]
+        with patch("src.fetcher.ak") as mock_ak, \
+                patch("src.fetcher.fetch_a_share_kline_mootdx",
+                      return_value=fallback_quotes) as mock_mootdx:
+            mock_ak.stock_zh_a_hist.return_value = pd.DataFrame()
+            result = fetch_daily_quotes(
+                ["600519"], days=30,
+                market_map={"600519": "A股"}, output_dir=str(tmp_path),
+            )
+            mock_mootdx.assert_called_once()
+            assert "600519" in result
+            assert result["600519"][0].symbol == "600519"

@@ -11,7 +11,7 @@ import time
 
 import akshare as ak
 
-from src.config import MARKET_A_SHARE, MARKET_FUTURES, MARKET_US, detect_market
+from src.config import MARKET_A_SHARE, MARKET_HK, MARKET_US, detect_market
 from src.llm import LLMProvider
 from src.models import Anomaly, Hypothesis, NewsItem
 
@@ -38,12 +38,9 @@ def fetch_news(
     if market is None:
         market = detect_market(symbol)
 
-    if market == MARKET_A_SHARE:
-        return _fetch_news_a_share(symbol, max_items)
-    elif market == MARKET_US:
+    if market in (MARKET_US, MARKET_HK):
+        # 美股/港股无免费新闻API，依赖WebSearch补充
         return _fetch_news_us_stock(symbol, max_items)
-    elif market == MARKET_FUTURES:
-        return _fetch_news_futures(symbol, max_items)
     else:
         return _fetch_news_a_share(symbol, max_items)
 
@@ -101,15 +98,6 @@ def _fetch_news_us_stock(symbol: str, max_items: int) -> list[NewsItem]:
     return []
 
 
-def _fetch_news_futures(symbol: str, max_items: int) -> list[NewsItem]:
-    """获取期货新闻（无专用API，依赖WebSearch补充）。"""
-    logger.info(
-        f"Futures news for {symbol}: 无免费API, "
-        f"需通过WebSearch补充搜索 '{symbol} futures news'"
-    )
-    return []
-
-
 def build_websearch_queries(symbol: str, name: str = "", market: str = "A股") -> list[str]:
     """构建WebSearch补充查询列表。
 
@@ -124,14 +112,7 @@ def build_websearch_queries(symbol: str, name: str = "", market: str = "A股") -
         搜索查询字符串列表
     """
     queries = []
-    if market == MARKET_FUTURES:
-        # 期货搜索查询
-        if name:
-            queries.append(f"{name} 期货 最新消息")
-            queries.append(f"{name} 行情分析")
-        else:
-            queries.append(f"{symbol} futures news today")
-    elif market == MARKET_US:
+    if market == MARKET_US:
         # 美股搜索查询
         if name:
             queries.append(f"{name} {symbol} stock news today")
@@ -139,6 +120,12 @@ def build_websearch_queries(symbol: str, name: str = "", market: str = "A股") -
         else:
             queries.append(f"{symbol} stock news today")
             queries.append(f"{symbol} stock earnings analyst rating")
+    elif market == MARKET_HK:
+        # 港股搜索查询
+        if name:
+            queries.append(f"{name} {symbol} 港股 最新消息")
+        else:
+            queries.append(f"{symbol} 港股 最新消息")
     else:
         # A股搜索查询
         if name:

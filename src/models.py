@@ -67,6 +67,42 @@ class Anomaly:
 
 
 @dataclass(frozen=True)
+class AShareBasicInfo:
+    """A股基本面快照（来自腾讯财经，估值 + 交易维度）。"""
+    symbol: str
+    name: str
+    price: float
+    change_pct: float
+    pe_ttm: float          # 市盈率(TTM)
+    pe_static: float       # 市盈率(静)
+    pb: float              # 市净率
+    mcap_yi: float         # 总市值(亿元)
+    float_mcap_yi: float   # 流通市值(亿元)
+    turnover_pct: float    # 换手率(%)
+    vol_ratio: float       # 量比
+    limit_up: float        # 涨停价
+    limit_down: float      # 跌停价
+
+
+@dataclass(frozen=True)
+class GlobalStockBasicInfo:
+    """美股/港股基本面快照 (来自 Yahoo quoteSummary)。"""
+    symbol: str
+    name: str
+    market: str
+    price: float
+    pe_ttm: float          # 市盈率(TTM)
+    forward_pe: float      # 前瞻市盈率
+    pb: float              # 市净率
+    peg: float             # PEG
+    market_cap: float      # 总市值(原始, 本币)
+    roe: float             # 净资产收益率(小数, 0.15=15%)
+    profit_margin: float   # 净利率(小数)
+    target_mean: float     # 分析师平均目标价
+    recommendation: str    # 评级 (buy/hold/sell)
+
+
+@dataclass(frozen=True)
 class NewsItem:
     title: str
     source: str
@@ -109,3 +145,5 @@ class ReportData:
     analyses: tuple[AnalysisResult, ...]
     hypothesis_updates: tuple[HypothesisUpdate, ...]
     market_summary: str
+    a_share_basics: tuple[AShareBasicInfo, ...] = ()
+    global_basics: tuple[GlobalStockBasicInfo, ...] = ()

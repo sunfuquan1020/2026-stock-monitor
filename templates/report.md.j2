@@ -4,6 +4,26 @@
 
 {{ market_summary }}
 
+{% if a_share_basics %}
+## A股基本面
+
+| 股票 | 代码 | 现价 | 涨跌幅 | PE(TTM) | PB | 总市值(亿) | 换手率 | 量比 |
+|------|------|------|--------|---------|----|-----------|--------|------|
+{% for b in a_share_basics %}
+| {{ b.name }} | {{ b.symbol }} | {{ "%.2f"|format(b.price) }} | {{ "%+.2f"|format(b.change_pct) }}% | {{ "%.1f"|format(b.pe_ttm) }} | {{ "%.2f"|format(b.pb) }} | {{ "%.0f"|format(b.mcap_yi) }} | {{ "%.2f"|format(b.turnover_pct) }}% | {{ "%.2f"|format(b.vol_ratio) }} |
+{% endfor %}
+{% endif %}
+
+{% if global_basics %}
+## 美股/港股基本面
+
+| 股票 | 代码 | 市场 | 现价 | PE(TTM) | 前瞻PE | PB | PEG | 市值(亿) | ROE | 目标价 | 评级 |
+|------|------|------|------|---------|--------|----|----|---------|-----|--------|------|
+{% for b in global_basics %}
+| {{ b.name }} | {{ b.symbol }} | {{ b.market }} | {{ "%.2f"|format(b.price) }} | {{ "%.1f"|format(b.pe_ttm) if b.pe_ttm else "-" }} | {{ "%.1f"|format(b.forward_pe) if b.forward_pe else "-" }} | {{ "%.2f"|format(b.pb) if b.pb else "-" }} | {{ "%.2f"|format(b.peg) if b.peg else "-" }} | {{ "%.0f"|format(b.market_cap / 1e8) if b.market_cap else "-" }} | {{ "%.1f"|format(b.roe * 100) ~ "%" if b.roe else "-" }} | {{ "%.2f"|format(b.target_mean) if b.target_mean else "-" }} | {{ b.recommendation or "-" }} |
+{% endfor %}
+{% endif %}
+
 {% if anomalies %}
 ## 异常波动信号
 

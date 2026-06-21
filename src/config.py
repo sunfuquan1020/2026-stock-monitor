@@ -16,7 +16,6 @@ from src.models import (
 MARKET_A_SHARE = "A股"
 MARKET_US = "美股"
 MARKET_HK = "港股"
-MARKET_FUTURES = "期货"
 
 
 def load_config(path: str) -> dict:
@@ -68,11 +67,7 @@ def detect_market(symbol: str) -> str:
     - 6位数字，首位0/3/6 -> A股
     - 4-5位数字 -> 港股
     - 纯字母(可含点号) -> 美股
-    - 交易所前缀+点号+合约代码 -> 期货 (如 SHFE.cu2501, CFFEX.IF2501)
     """
-    # 期货: 交易所前缀(大写)+点号+合约代码(含数字)，如 SHFE.cu2501, CFFEX.IF2506
-    if re.match(r"^[A-Z]+\.[A-Za-z]+\d+$", symbol):
-        return MARKET_FUTURES
     if re.match(r"^[036]\d{5}$", symbol):
         return MARKET_A_SHARE
     elif re.match(r"^\d{4,5}$", symbol):
