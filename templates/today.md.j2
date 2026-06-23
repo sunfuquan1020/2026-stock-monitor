@@ -131,7 +131,7 @@
 |------|----------|------|------|
 {% for analysis in analyses %}
 {% for news in analysis.news_items[:3] %}
-| {{ analysis.symbol }} | {{ news.title[:40] }} | {{ news.source }} | {{ news.publish_time }} |
+| {{ analysis.anomaly.name if analysis.anomaly else analysis.symbol }}（{{ analysis.symbol }}） | {{ news.title[:40] }} | {{ news.source }} | {{ news.publish_time }} |
 {% endfor %}
 {% endfor %}
 {% else %}

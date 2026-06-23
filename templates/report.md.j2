@@ -34,7 +34,7 @@
 {% endfor %}
 
 {% for analysis in analyses %}
-### {{ analysis.symbol }} -- {{ analysis.anomaly.anomaly_type.value if analysis.anomaly else "分析" }}
+### {{ analysis.anomaly.name if analysis.anomaly else analysis.symbol }}（{{ analysis.symbol }}）-- {{ analysis.anomaly.anomaly_type.value if analysis.anomaly else "分析" }}
 
 {{ analysis.claude_analysis }}
 
