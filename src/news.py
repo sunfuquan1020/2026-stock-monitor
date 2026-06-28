@@ -1,15 +1,13 @@
 """新闻获取与AI分析模块。
 
-数据源:
-- A股: AKShare stock_news_em (东方财富新闻)
-- 美股: WebSearch辅助 (Finnhub不提供新闻)
+新闻数据源:
+- 全市场 (A股/美股/港股): WebSearch 补充
+  A股原 AKShare stock_news_em 接口 TLS 不稳定 (curl 35)，已弃用，统一走 WebSearch。
+  fetch_news 返回空列表 -> main.py 收集 WebSearch 查询 (见 build_websearch_queries)。
 """
 
 import json
 import logging
-import time
-
-import akshare as ak
 
 from src.config import MARKET_A_SHARE, MARKET_HK, MARKET_US, detect_market
 from src.llm import LLMProvider
@@ -17,84 +15,34 @@ from src.models import Anomaly, Hypothesis, NewsItem
 
 logger = logging.getLogger(__name__)
 
-# AKShare新闻获取重试配置
-NEWS_MAX_RETRIES = 2
-NEWS_RETRY_DELAY = 3.0
-
 
 def fetch_news(
     symbol: str, max_items: int = 10, market: str | None = None
 ) -> list[NewsItem]:
-    """获取股票相关新闻，按市场选择数据源。
+    """获取股票相关新闻。
+
+    所有市场均无稳定免费新闻API，统一返回空列表并由上层用 WebSearch 补充：
+    - A股: AKShare stock_news_em TLS 不稳定，已弃用
+    - 美股/港股: 无免费API
 
     Args:
         symbol: 股票代码
-        max_items: 最多返回条数
-        market: 市场标识 (A股/美股)，未提供则自动检测
+        max_items: 最多返回条数 (保留参数，当前未用)
+        market: 市场标识 (A股/美股/港股)，未提供则自动检测
 
     Returns:
-        NewsItem列表
+        空列表 (新闻由 WebSearch 补充)
     """
     if market is None:
         market = detect_market(symbol)
 
-    if market in (MARKET_US, MARKET_HK):
-        # 美股/港股无免费新闻API，依赖WebSearch补充
-        return _fetch_news_us_stock(symbol, max_items)
+    if market == MARKET_A_SHARE:
+        hint = f"'{symbol} A股 最新消息'"
+    elif market == MARKET_HK:
+        hint = f"'{symbol} 港股 最新消息'"
     else:
-        return _fetch_news_a_share(symbol, max_items)
-
-
-def _fetch_news_a_share(symbol: str, max_items: int) -> list[NewsItem]:
-    """通过AKShare获取A股新闻。"""
-    for attempt in range(NEWS_MAX_RETRIES):
-        try:
-            df = ak.stock_news_em(symbol=symbol)
-
-            if df is None or df.empty:
-                return []
-
-            items = []
-            for _, row in df.head(max_items).iterrows():
-                try:
-                    item = NewsItem(
-                        title=str(row.get("新闻标题", "")),
-                        source=str(row.get("文章来源", "")),
-                        url=str(row.get("新闻链接", "")),
-                        publish_time=str(row.get("发布时间", "")),
-                        content_snippet=str(row.get("新闻内容", ""))[:200],
-                    )
-                    items.append(item)
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"Failed to parse news for {symbol}: {e}")
-
-            return items
-
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "rate" in error_msg or "limit" in error_msg or "frequency" in error_msg:
-                if attempt < NEWS_MAX_RETRIES - 1:
-                    wait_time = NEWS_RETRY_DELAY * (attempt + 1)
-                    logger.warning(
-                        f"AKShare rate limited for news {symbol}, "
-                        f"retrying in {wait_time}s (attempt {attempt + 1}/{NEWS_MAX_RETRIES})"
-                    )
-                    time.sleep(wait_time)
-                else:
-                    logger.error(f"Failed to fetch A-share news for {symbol}: {e}")
-                    return []
-            else:
-                logger.error(f"Failed to fetch A-share news for {symbol}: {e}")
-                return []
-    return []
-
-
-def _fetch_news_us_stock(symbol: str, max_items: int) -> list[NewsItem]:
-    """获取美股新闻（目前无免费API，依赖WebSearch补充）。"""
-    logger.info(
-        f"US stock news for {symbol}: 无免费API, "
-        f"需通过WebSearch补充搜索 '{symbol} stock news today'"
-    )
+        hint = f"'{symbol} stock news today'"
+    logger.info(f"{market} {symbol} 新闻: 无免费API, 需通过 WebSearch 补充搜索 {hint}")
     return []
 
 

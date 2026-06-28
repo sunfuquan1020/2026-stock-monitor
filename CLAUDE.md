@@ -59,9 +59,8 @@ Linear pipeline: config -> fetch -> detect -> analyze -> report
 - **anomaly.py**: Three detectors - price change, volume spike, consecutive move
 - **llm.py**: LLM provider abstraction (Claude API / Ollama / OpenRouter / NVIDIA)
 - **news.py**: News fetching + AI analysis
-  - A股: AKShare `ak.stock_news_em` (东方财富新闻)
-  - 美股/港股: WebSearch supplementary (无免费API)
-  - `build_websearch_queries()` for generating search queries
+  - 全市场 (A股/美股/港股): WebSearch supplementary (统一无免费API; A股原 AKShare stock_news_em TLS 不稳定已弃用)
+  - `fetch_news()` 返回空 -> main.py 收集 `build_websearch_queries()` 生成的查询
 - **hypothesis.py**: Investment hypothesis tracking with history
 - **report.py**: Jinja2-based markdown report generation (含 A股基本面 + 美股/港股基本面 表格 + multi-market summary)
 - **main.py**: CLI entry point orchestrating the pipeline

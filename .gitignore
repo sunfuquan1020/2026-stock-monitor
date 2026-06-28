@@ -8,3 +8,4 @@ dist/
 build/
 config.yaml
 .DS_Store
+config.yaml.bak
