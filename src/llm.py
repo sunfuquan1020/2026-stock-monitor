@@ -1,4 +1,4 @@
-"""LLM提供商抽象层，支持Claude / Ollama / OpenRouter / NVIDIA。"""
+"""LLM提供商抽象层，支持Claude / OpenAI / DeepSeek / Ollama / OpenRouter / NVIDIA。"""
 
 import json
 import logging
@@ -92,7 +92,28 @@ class OllamaProvider:
         return "Ollama调用失败"
 
 
-# ── OpenAI兼容基类（OpenRouter / NVIDIA 共用） ─────────────────
+def _resolve_api_key(api_key: str, env_var: str) -> str:
+    """解析API key：配置文件优先，环境变量兜底。
+
+    Args:
+        api_key: 配置文件中填写的api_key（可为空）
+        env_var: 对应的环境变量名
+
+    Returns:
+        有效的API key
+
+    Raises:
+        ValueError: 配置和环境变量都没有提供key
+    """
+    key = api_key or os.environ.get(env_var, "")
+    if not key:
+        raise ValueError(
+            f"未提供API key：请在配置文件中填写 api_key，或设置环境变量 {env_var}"
+        )
+    return key
+
+
+# ── OpenAI兼容基类（OpenAI / DeepSeek / OpenRouter / NVIDIA 共用） ──
 class _OpenAICompatibleProvider:
     """OpenAI兼容API基类。"""
 
@@ -150,11 +171,55 @@ class _OpenAICompatibleProvider:
         return "API调用失败"
 
 
+# ── OpenAI ─────────────────────────────────────────────────────
+class OpenAIProvider(_OpenAICompatibleProvider):
+    """OpenAI API提供商。
+
+    API key: 配置文件 api_key 优先，否则读环境变量 OPENAI_API_KEY
+    模型列表: https://platform.openai.com/docs/models
+    base_url: 可自定义（Azure/代理/兼容端点），默认官方
+    """
+
+    def __init__(
+        self,
+        model: str = "gpt-4o",
+        api_key: str = "",
+        base_url: str = "https://api.openai.com/v1",
+    ):
+        super().__init__(
+            model=model,
+            base_url=base_url,
+            api_key=_resolve_api_key(api_key, "OPENAI_API_KEY"),
+        )
+
+
+# ── DeepSeek ───────────────────────────────────────────────────
+class DeepSeekProvider(_OpenAICompatibleProvider):
+    """DeepSeek API提供商（OpenAI兼容）。
+
+    API key: 配置文件 api_key 优先，否则读环境变量 DEEPSEEK_API_KEY
+    模型: deepseek-chat（V3）/ deepseek-reasoner（R1推理）
+    文档: https://api-docs.deepseek.com
+    """
+
+    def __init__(
+        self,
+        model: str = "deepseek-chat",
+        api_key: str = "",
+        base_url: str = "https://api.deepseek.com/v1",
+    ):
+        super().__init__(
+            model=model,
+            base_url=base_url,
+            api_key=_resolve_api_key(api_key, "DEEPSEEK_API_KEY"),
+        )
+
+
 # ── OpenRouter ─────────────────────────────────────────────────
 class OpenRouterProvider(_OpenAICompatibleProvider):
     """OpenRouter API提供商。
 
-    环境变量: OPENROUTER_API_KEY
+    API key: 配置文件 api_key 优先，否则读环境变量 OPENROUTER_API_KEY
     模型列表: https://openrouter.ai/models
     """
 
@@ -163,13 +228,10 @@ class OpenRouterProvider(_OpenAICompatibleProvider):
         model: str = "qwen/qwen-2.5-72b-instruct",
         api_key: str = "",
     ):
-        key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
-        if not key:
-            raise ValueError("未设置OPENROUTER_API_KEY环境变量")
         super().__init__(
             model=model,
             base_url="https://openrouter.ai/api/v1",
-            api_key=key,
+            api_key=_resolve_api_key(api_key, "OPENROUTER_API_KEY"),
         )
 
 
@@ -177,7 +239,7 @@ class OpenRouterProvider(_OpenAICompatibleProvider):
 class NvidiaProvider(_OpenAICompatibleProvider):
     """NVIDIA build.nvidia.com API提供商。
 
-    环境变量: NVIDIA_API_KEY
+    API key: 配置文件 api_key 优先，否则读环境变量 NVIDIA_API_KEY
     模型列表: https://build.nvidia.com/explore/discover
     """
 
@@ -186,13 +248,10 @@ class NvidiaProvider(_OpenAICompatibleProvider):
         model: str = "nvidia/llama-3.1-nemotron-70b-instruct",
         api_key: str = "",
     ):
-        key = api_key or os.environ.get("NVIDIA_API_KEY", "")
-        if not key:
-            raise ValueError("未设置NVIDIA_API_KEY环境变量")
         super().__init__(
             model=model,
             base_url="https://integrate.api.nvidia.com/v1",
-            api_key=key,
+            api_key=_resolve_api_key(api_key, "NVIDIA_API_KEY"),
         )
 
 
@@ -200,7 +259,9 @@ class NvidiaProvider(_OpenAICompatibleProvider):
 def create_provider(config: dict) -> LLMProvider:
     """根据配置创建LLM提供商。
 
-    支持的 provider: claude, ollama, openrouter, nvidia
+    支持的 provider: claude, openai, deepseek, ollama, openrouter, nvidia
+    OpenAI兼容的提供商(openai/deepseek/openrouter/nvidia)均支持在配置文件中
+    直接填写 api_key（优先），否则回退到各自的环境变量。
 
     Args:
         config: 完整配置字典
@@ -211,7 +272,21 @@ def create_provider(config: dict) -> LLMProvider:
     llm_config = config.get("llm", {})
     provider = llm_config.get("provider", "claude")
 
-    if provider == "ollama":
+    if provider == "openai":
+        oa_config = config.get("openai", {})
+        return OpenAIProvider(
+            model=oa_config.get("model", "gpt-4o"),
+            api_key=oa_config.get("api_key", ""),
+            base_url=oa_config.get("base_url", "https://api.openai.com/v1"),
+        )
+    elif provider == "deepseek":
+        ds_config = config.get("deepseek", {})
+        return DeepSeekProvider(
+            model=ds_config.get("model", "deepseek-chat"),
+            api_key=ds_config.get("api_key", ""),
+            base_url=ds_config.get("base_url", "https://api.deepseek.com/v1"),
+        )
+    elif provider == "ollama":
         ollama_config = config.get("ollama", {})
         return OllamaProvider(
             model=ollama_config.get("model", "qwen2.5:14b"),
@@ -221,11 +296,13 @@ def create_provider(config: dict) -> LLMProvider:
         or_config = config.get("openrouter", {})
         return OpenRouterProvider(
             model=or_config.get("model", "qwen/qwen-2.5-72b-instruct"),
+            api_key=or_config.get("api_key", ""),
         )
     elif provider == "nvidia":
         nv_config = config.get("nvidia", {})
         return NvidiaProvider(
             model=nv_config.get("model", "nvidia/llama-3.1-nemotron-70b-instruct"),
+            api_key=nv_config.get("api_key", ""),
         )
     else:
         claude_config = config.get("claude", {})

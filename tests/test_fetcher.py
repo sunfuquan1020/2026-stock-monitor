@@ -245,11 +245,13 @@ class TestFetchDailyQuotes:
 
     @patch("src.fetcher.httpx")
     def test_us_stock_history_merges(self, mock_httpx, tmp_path):
-        # Pre-populate history
+        # Pre-populate history（相对今天取日期，确保落在 days=30 窗口内）
         history_path = tmp_path / "us_quote_history.json"
+        d1 = (date.today() - timedelta(days=3)).isoformat()
+        d2 = (date.today() - timedelta(days=2)).isoformat()
         history = {"AAPL": [
-            {"date": "2026-05-20", "open": 300, "close": 302, "high": 305, "low": 298, "volume": 40000000, "change_pct": 0.5},
-            {"date": "2026-05-21", "open": 302, "close": 305, "high": 308, "low": 300, "volume": 42000000, "change_pct": 1.0},
+            {"date": d1, "open": 300, "close": 302, "high": 305, "low": 298, "volume": 40000000, "change_pct": 0.5},
+            {"date": d2, "open": 302, "close": 305, "high": 308, "low": 300, "volume": 42000000, "change_pct": 1.0},
         ]}
         history_path.write_text(json.dumps(history))
 

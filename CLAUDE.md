@@ -57,7 +57,7 @@ Linear pipeline: config -> fetch -> detect -> analyze -> report
   - 基本面: Yahoo quoteSummary (PE/前瞻PE/PB/PEG/市值/ROE/利润率/目标价/评级, 自动cookie+crumb)
   - `to_yahoo_symbol()`: 美股点号转横线(BRK.B->BRK-B), 港股补零加后缀(00700->0700.HK)
 - **anomaly.py**: Three detectors - price change, volume spike, consecutive move
-- **llm.py**: LLM provider abstraction (Claude API / Ollama / OpenRouter / NVIDIA)
+- **llm.py**: LLM provider abstraction (Claude API / OpenAI / DeepSeek / Ollama / OpenRouter / NVIDIA). OpenAI-compatible providers (openai/deepseek/openrouter/nvidia) share `_OpenAICompatibleProvider`; API key resolves config `api_key` first, then env var via `_resolve_api_key()`
 - **news.py**: News fetching + AI analysis
   - 全市场 (A股/美股/港股): WebSearch supplementary (统一无免费API; A股原 AKShare stock_news_em TLS 不稳定已弃用)
   - `fetch_news()` 返回空 -> main.py 收集 `build_websearch_queries()` 生成的查询
@@ -72,11 +72,13 @@ Linear pipeline: config -> fetch -> detect -> analyze -> report
 - `watchlist`: Stock symbols with `market` field ("A股"/"美股"/"港股")
 - `thresholds`: Anomaly detection thresholds
 - `hypotheses`: Investment hypotheses to track (can include cross-market symbols)
-- `llm.provider`: "claude" / "ollama" / "openrouter" / "nvidia"
+- `llm.provider`: "claude" / "openai" / "deepseek" / "ollama" / "openrouter" / "nvidia"
 - `claude`: API model settings (provider=claude)
-- `ollama`: Ollama settings (provider=ollama)
+- `openai`: model + optional `api_key` + `base_url` (provider=openai; base_url overridable for Azure/proxy)
+- `deepseek`: model + optional `api_key` + `base_url` (provider=deepseek, OpenAI-compatible)
+- `ollama`: Ollama settings (provider=ollama, local/cloud)
 
-API keys from env vars: `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`, `FINNHUB_API_KEY` (美股主要数据源).
+API keys: OpenAI-compatible providers accept `api_key` directly in `config.yaml` (takes precedence), otherwise fall back to env vars — `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`. Also `ANTHROPIC_API_KEY` (Claude), `FINNHUB_API_KEY` (美股主要数据源).
 
 ## Output
 
