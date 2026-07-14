@@ -363,13 +363,13 @@ python -m src.main --config config.yaml
 | --dry-run | 否 | false | 跳过LLM调用，仅检测异动 |
 | --today | 否 | false | 同时生成Today日报 |
 
-### 6.4 Claude Code /today 命令（推荐）
+### 6.4 Claude Code /stock 命令（推荐）
 
-在 Claude Code 中直接输入 `/today` 即可一键运行每日监控，无需手动执行命令。
+在 Claude Code 中直接输入 `/stock` 即可一键运行每日监控，无需手动执行命令。
 
 **使用方式：**
 ```
-/today
+/stock
 ```
 
 **执行内容：**
@@ -378,7 +378,7 @@ python -m src.main --config config.yaml
 3. 读取并展示生成的 Today 日报
 4. 汇总异动股票、AI 分析摘要、假设状态变化
 
-**Skill 文件位置：** `.claude/skills/today/SKILL.md`
+**Skill 文件位置：** `.claude/skills/stock/SKILL.md`
 
 ### 6.5 运行流程
 
@@ -774,7 +774,7 @@ tail -f /tmp/stock-monitor-error.log
 
 ```bash
 # Claude Code 一键运行（推荐）
-/today
+/stock
 
 # 激活环境
 source .venv/bin/activate
