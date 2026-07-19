@@ -6,14 +6,16 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from src.anomaly import detect_anomalies
-from src.astock import fetch_a_share_basics
+from src.anomaly import aggregate_sector_signals, detect_anomalies
+from src.astock import fetch_a_share_basics, fetch_fund_flow_rank, fetch_lhb_hits
+from src.calendar_events import fetch_event_calendar
 from src.config import MARKET_HK, get_hypotheses, get_thresholds, get_watchlist, load_config
 from src.fetcher import fetch_daily_quotes
 from src.global_stock import fetch_global_basics
 from src.hypothesis import check_hypotheses, save_hypothesis_history
 from src.llm import LLMProvider, create_provider
-from src.models import AnalysisResult, ReportData, StockConfig
+from src.market import build_thermometer
+from src.models import AnalysisResult, DailyQuote, ReportData, StockConfig
 from src.news import analyze_anomaly, build_websearch_queries, collect_websearch_queries, fetch_news
 from src.report import cleanup_old_reports, generate_report, generate_today_report, save_report
 
@@ -90,10 +92,48 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
         global_basics = [gmap[sym] for sym, _, _ in global_items if sym in gmap]
         logger.info(f"Got basics for {len(global_basics)} 美股/港股")
 
-    # Step 2: 检测异动
+    # Step 1d: 市场体温计 (指数+宽度+两融 → regime状态机)
+    logger.info("Building market thermometer...")
+    thermometer = None
+    try:
+        thermometer = build_thermometer(quotes, watchlist, output_dir)
+        logger.info(
+            f"Market regime: {thermometer.regime} "
+            f"({' | '.join(thermometer.regime_reasons)})"
+        )
+    except Exception as e:
+        logger.warning(f"Thermometer failed (non-fatal): {e}")
+
+    # Step 2: 检测异动 (滞后信号 + 预测性信号)
     logger.info("Detecting anomalies...")
     anomalies = detect_anomalies(quotes, watchlist, thresholds)
     logger.info(f"Found {len(anomalies)} anomalies")
+
+    # Step 2a: 板块聚合信号
+    sector_signals = aggregate_sector_signals(quotes, watchlist, anomalies)
+
+    # Step 2b: 数据质量检查 (stale美股等)
+    data_warnings = _check_data_quality(quotes, market_map)
+
+    # Step 2c: 未来风险日历 (财报/解禁/新股)
+    calendar_events = []
+    try:
+        calendar_events, cal_warnings = fetch_event_calendar(watchlist)
+        data_warnings.extend(cal_warnings)
+        logger.info(f"Calendar events: {len(calendar_events)}")
+    except Exception as e:
+        logger.warning(f"Event calendar failed (non-fatal): {e}")
+
+    # Step 2d: A股资金面 (主力资金流 + 龙虎榜)
+    fund_flows, lhb_entries = [], []
+    try:
+        fund_flows, ff_warnings = fetch_fund_flow_rank(a_share_symbols)
+        data_warnings.extend(ff_warnings)
+        lhb_entries, lhb_warnings = fetch_lhb_hits(a_share_symbols)
+        data_warnings.extend(lhb_warnings)
+        logger.info(f"Fund flows: {len(fund_flows)}, LHB hits: {len(lhb_entries)}")
+    except Exception as e:
+        logger.warning(f"Fund flow/LHB failed (non-fatal): {e}")
 
     # Step 3: 新闻分析
     analyses: list[AnalysisResult] = []
@@ -168,6 +208,12 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
         market_summary=market_summary,
         a_share_basics=tuple(a_share_basics),
         global_basics=tuple(global_basics),
+        thermometer=thermometer,
+        sector_signals=tuple(sector_signals),
+        calendar_events=tuple(calendar_events),
+        fund_flows=tuple(fund_flows),
+        lhb_entries=tuple(lhb_entries),
+        data_warnings=tuple(data_warnings),
     )
 
     template_dir = str(Path(__file__).parent.parent / "templates")
@@ -190,6 +236,34 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
         logger.info(f"Cleaned up {deleted} old reports")
 
     return report_path
+
+
+STALE_US_RATIO = 0.8  # 美股 ≥80% 标的当日涨跌幅为0 → 判定数据未更新
+
+
+def _check_data_quality(
+    quotes: dict[str, list[DailyQuote]],
+    market_map: dict[str, str],
+) -> list[str]:
+    """数据质量检查: stale美股(全为0%涨跌幅=Finnhub未更新)等。"""
+    warnings: list[str] = []
+
+    us_latest = [
+        dq[-1]
+        for s, dq in quotes.items()
+        if dq and market_map.get(s) == "美股"
+    ]
+    if us_latest:
+        zero_count = sum(
+            1 for q in us_latest if q.change_pct == 0.0 and q.volume == 0
+        )
+        if zero_count / len(us_latest) >= STALE_US_RATIO:
+            warnings.append(
+                f"美股数据疑似未更新 ({zero_count}/{len(us_latest)} 只涨跌幅为0且无量), "
+                "当日美股行情与异动不可信, 分析时忽略"
+            )
+
+    return warnings
 
 
 def _build_market_summary(

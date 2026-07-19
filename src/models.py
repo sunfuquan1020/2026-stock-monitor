@@ -11,6 +11,11 @@ class AnomalyType(str, Enum):
     PRICE_DROP = "price_drop"
     VOLUME_SPIKE = "volume_spike"
     CONSECUTIVE_MOVE = "consecutive_move"
+    # 预测性信号（威科夫框架，提前于价格崩溃）
+    DISTRIBUTION_WARNING = "distribution_warning"  # 派发预警: 高位放量滞涨 / 缩量创新高(UTAD)
+    VOLUME_DRYUP = "volume_dryup"                  # 地量: 深度回撤后量能枯竭, Markdown尾声候选
+    LONE_STRENGTH = "lone_strength"                # 独苗背离: 板块普跌中单票逆势极强, 补跌风险
+    MOMENTUM_EXHAUSTION = "momentum_exhaustion"    # 量能衰竭: 连涨但量逐日递减
 
 
 class Severity(str, Enum):
@@ -103,6 +108,90 @@ class GlobalStockBasicInfo:
 
 
 @dataclass(frozen=True)
+class IndexQuote:
+    """指数行情快照。"""
+    symbol: str
+    name: str
+    price: float
+    change_pct: float
+
+
+@dataclass(frozen=True)
+class MarketBreadth:
+    """A股全市场宽度（涨跌/涨跌停家数）。"""
+    up_count: int
+    down_count: int
+    flat_count: int
+    limit_up: int
+    limit_down: int
+
+    @property
+    def down_ratio(self) -> float:
+        total = self.up_count + self.down_count
+        return self.down_count / total if total else 0.0
+
+
+@dataclass(frozen=True)
+class MarginSnapshot:
+    """两融余额快照（沪市，亿元）。"""
+    trade_date: str
+    balance_yi: float
+    change_yi: float
+
+
+@dataclass(frozen=True)
+class MarketThermometer:
+    """市场体温计: 指数 + 宽度 + 两融 + regime状态机。"""
+    cn_indexes: tuple[IndexQuote, ...] = ()
+    global_indexes: tuple[IndexQuote, ...] = ()
+    breadth: MarketBreadth | None = None
+    margin: MarginSnapshot | None = None
+    regime: str = "未知"
+    regime_reasons: tuple[str, ...] = ()
+    regime_history: tuple[str, ...] = ()  # 近5日 "date:regime" 轨迹
+
+
+@dataclass(frozen=True)
+class SectorSignal:
+    """板块聚合信号（识别板块效应 vs 单票行为）。"""
+    sector: str
+    total: int
+    up_count: int
+    down_count: int
+    median_change_pct: float
+    anomaly_count: int
+
+
+@dataclass(frozen=True)
+class CalendarEvent:
+    """未来风险日历事件。"""
+    event_date: str  # ISO日期
+    category: str    # 财报 / 解禁 / 新股
+    symbol: str
+    name: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class FundFlowInfo:
+    """A股主力资金流（东财，当日）。"""
+    symbol: str
+    name: str
+    main_net_inflow_yi: float  # 主力净流入(亿)
+    main_net_pct: float        # 主力净占比(%)
+
+
+@dataclass(frozen=True)
+class LhbEntry:
+    """龙虎榜命中记录。"""
+    symbol: str
+    name: str
+    trade_date: str
+    reason: str
+    net_buy_yi: float
+
+
+@dataclass(frozen=True)
 class NewsItem:
     title: str
     source: str
@@ -147,3 +236,9 @@ class ReportData:
     market_summary: str
     a_share_basics: tuple[AShareBasicInfo, ...] = ()
     global_basics: tuple[GlobalStockBasicInfo, ...] = ()
+    thermometer: "MarketThermometer | None" = None
+    sector_signals: tuple[SectorSignal, ...] = ()
+    calendar_events: tuple[CalendarEvent, ...] = ()
+    fund_flows: tuple[FundFlowInfo, ...] = ()
+    lhb_entries: tuple[LhbEntry, ...] = ()
+    data_warnings: tuple[str, ...] = ()

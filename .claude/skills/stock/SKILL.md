@@ -25,26 +25,64 @@ cd /Volumes/SSD2T/Users/fortune/2026-投资/2026-stock-monitor
 
 3. 读取 pipeline 生成的数据报告：
 ```bash
-cat output/$(date +%Y-%m-%d).md          # 含：市场概览 + A股基本面 + 美股/港股基本面 + 异常波动信号表
+cat output/$(date +%Y-%m-%d).md
 ```
+   报告结构（自上而下）：
+   - **⚠️ 数据质量警告**（若有）：如「美股数据疑似未更新」→ 当日忽略美股行情/异动
+   - **市场体温计**：指数 + 隔夜外围(纳指/费半/恒指) + 涨跌/涨跌停家数 + 沪市两融
+     + **Regime 状态机**（进攻/换挡/震荡/熄火/杀跌）+ 近5日轨迹
+     → **regime 是数据算出来的每日必判基准，直接采用，只在有强反证时才推翻**；
+       连续降档（如 熄火→杀跌）本身就是最强风险信号
+   - **板块聚合信号**：各板块 涨/跌只数 + 中位涨跌幅 + 异动数 → 直接判「板块效应 vs 单票行为」
+   - 市场概览 / A股基本面 / 美股港股基本面
+   - **异常波动信号**（同股已合并，severity 已按个股波动率 z-score 校准）
+   - **主力资金流向**（watchlist A股 Top/Bottom10）+ **龙虎榜命中**（游资定性铁证）
+   - **未来风险日历**：美股财报 / A股解禁 / 新股申购 → **事前预警，分析里必须引用**
 
-4. **Claude 直接分析异动（核心步骤，代替内置 LLM）**：
-   - 从上面报告的「异常波动信号」表读取全部异动（含类型/严重程度/涨跌幅/量比等 details）
-   - 结合「A股基本面 / 美股港股基本面」表里的 PE/PB/市值/换手率/目标价等
-   - **应用下方「多空逻辑 × 威科夫」分析框架**，判断主线/非主线、量价结构阶段
-   - 对每个 **high** 严重度异动写简明分析：①可能原因 ②短期风险/机会 ③关注信号
+4. **昨日判断验证（先复盘再分析，防止重复犯错）**：
+   - 读取最近一份 `output/judgments/*.json`（按文件名取最新）
+   - 逐条对照今日数据判定：`确认 / 证伪 / 待定`
+   - 在 analysis.md 开头写「昨日判断验证」小节；**连续证伪同方向判断 = 市场无主线的确认信号**
+
+5. **Claude 直接分析异动（核心步骤，代替内置 LLM）**：
+   - 从「异常波动信号」表读取全部异动；**预测性信号优先分析**（见下表），它们先于价格崩溃：
+
+   | 信号 | 含义 | 框架对应操作 |
+   |------|------|-------------|
+   | distribution_warning | 高位放量滞涨 / 缩量创新高(UTAD) | 派发预警 → 减仓预警 |
+   | volume_dryup | 深跌后连续地量 | Markdown尾声候选 → 左侧观察名单 |
+   | lone_strength | 板块普跌单票逆势极强 | 独苗背离 → 补跌风险，别追（实证：新易盛07-14→07-18） |
+   | momentum_exhaustion | 连涨但量逐日递减 | Effort递减 → 动能衰竭，不追高 |
+
+   - 结合基本面表 + **主力资金流**（异动方向与主力资金背离 = 可疑）+ **龙虎榜**（上榜 = 游资票定性）
+   - **应用「多空逻辑 × 威科夫」分析框架**，判断主线/非主线、量价结构阶段；regime 直接引用体温计
+   - 对每个 **high** 异动写简明分析：①可能原因 ②短期风险/机会 ③关注信号
    - **medium** 异动汇总成表，逐行一句话点评
+   - 引用「未来风险日历」：财报/解禁临近的持仓标的必须提示
    - 把分析写入 `output/$(date +%Y-%m-%d)-analysis.md`（标题「🤖 Claude 异动分析 -- 日期」），并在对话中给出要点
 
-5. (可选) WebSearch 补充新闻：对重点异动股票搜索 `'代码 A股/港股 最新消息'` 或 `'TICKER stock news today'`，把关键信息融进你的分析。
+6. **写入今日判断存档（复盘闭环）**：
+   - 保存 `output/judgments/$(date +%Y-%m-%d).json`，schema：
+   ```json
+   {"date": "YYYY-MM-DD", "regime": "杀跌",
+    "judgments": [{"id": "j1", "claim": "有色换挡成立",
+                   "falsifiable": "明日有色板块中位数转跌或龙头缩量破位",
+                   "horizon_days": 2, "status": "open"}]}
+   ```
+   - 每条判断必须带**可证伪条件**和期限；只记关键判断（3-6条），不记显然事实
+   - 同步维护 `output/focus_list.json`（重点关注清单），记录进出与理由
 
-6. (可选) 实时行情：`python -m src.realtime --watchlist watchlist.md`
+7. (可选) WebSearch 补充新闻：对重点异动股票搜索 `'代码 A股/港股 最新消息'` 或 `'TICKER stock news today'`，把关键信息融进你的分析。
 
-7. 汇总输出：
-   - 各市场数据获取情况（A股/美股/港股 数量）
-   - 异动数量；high/medium 分布
-   - Claude 分析要点 + analysis 文件路径
-   - 数据报告路径 output/日期.md
+8. (可选) 实时行情：`python -m src.realtime --watchlist watchlist.md`
+
+9. 汇总输出：
+   - **Regime + 近5日轨迹**（降档必须醒目提示）
+   - 各市场数据获取情况（A股/美股/港股 数量）+ 数据质量警告
+   - 异动数量；high/medium 分布；预测性信号单独列出
+   - 昨日判断验证结果（确认/证伪各几条）
+   - Claude 分析要点 + analysis 文件路径 + 数据报告路径
+   - 未来风险日历要点（3日内的财报/解禁）
 
 ## 多空逻辑 × 威科夫 分析框架
 
@@ -118,6 +156,13 @@ cat output/$(date +%Y-%m-%d).md          # 含：市场概览 + A股基本面 + 
 | A股 | AKShare (`ak.stock_zh_a_hist`) 主 + mootdx 兜底 | `akshare` / `mootdx` 包 |
 | 美股 | Finnhub (主) + Stooq (备) + Yahoo (历史K线) | `FINNHUB_API_KEY` 环境变量 |
 | 港股 | Yahoo Finance chart | 无 |
+| A股指数 | 腾讯 `qt.gtimg.cn` 简版行情 (不封IP) | 无 |
+| 外围指数 | Yahoo chart (纳指/费半/恒指) | 无 |
+| 市场宽度 | AKShare 乐咕乐股 (涨跌/涨跌停家数) | `akshare` |
+| 两融余额 | AKShare 上交所 (T+1) | `akshare` |
+| 主力资金流/龙虎榜 | AKShare 东财批量接口 | `akshare` |
+| 财报日历 | Finnhub earnings calendar | `FINNHUB_API_KEY` |
+| 解禁/新股日历 | AKShare 东财 | `akshare` |
 | 全市场新闻 | WebSearch 补充 (A股/美股/港股统一) | 无 |
 
 ## 注意事项
@@ -127,3 +172,5 @@ cat output/$(date +%Y-%m-%d).md          # 含：市场概览 + A股基本面 + 
 - 当前 LLM 提供商由 `config.yaml` 中 `llm.provider` 决定
 - 报告输出在 `output/` 目录
 - 美股历史数据累积在 `output/us_quote_history.json`
+- Regime 历史在 `output/market_regime_history.json`；判断存档在 `output/judgments/`；关注清单在 `output/focus_list.json`
+- 体温计/日历/资金面任一数据源失败只降级不中断，失败原因进「数据质量警告」

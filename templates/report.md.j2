@@ -1,5 +1,54 @@
 # 多市场每日监控报告 -- {{ date }}
 
+{% if data_warnings %}
+> ⚠️ **数据质量警告**
+{% for w in data_warnings %}
+> - {{ w }}
+{% endfor %}
+
+{% endif %}
+{% if thermometer %}
+## 市场体温计
+
+**Regime: {{ thermometer.regime }}**{% if thermometer.regime_reasons %} — {{ thermometer.regime_reasons | join("; ") }}{% endif %}
+
+近5日轨迹: {{ thermometer.regime_history | join(" → ") if thermometer.regime_history else "无历史" }}
+
+{% if thermometer.cn_indexes %}
+| 指数 | 点位 | 涨跌幅 |
+|------|------|--------|
+{% for q in thermometer.cn_indexes %}
+| {{ q.name }} | {{ "%.2f"|format(q.price) }} | {{ "%+.2f"|format(q.change_pct) }}% |
+{% endfor %}
+{% endif %}
+{% if thermometer.global_indexes %}
+
+| 隔夜/外围 | 点位 | 涨跌幅 |
+|-----------|------|--------|
+{% for q in thermometer.global_indexes %}
+| {{ q.name }} | {{ "%.2f"|format(q.price) }} | {{ "%+.2f"|format(q.change_pct) }}% |
+{% endfor %}
+{% endif %}
+{% if thermometer.breadth %}
+
+**市场宽度**: 上涨 {{ thermometer.breadth.up_count }} / 下跌 {{ thermometer.breadth.down_count }} (下跌占比 {{ "%.0f"|format(thermometer.breadth.down_ratio * 100) }}%) ｜ 涨停 {{ thermometer.breadth.limit_up }} / 跌停 {{ thermometer.breadth.limit_down }}
+{% endif %}
+{% if thermometer.margin %}
+
+**沪市两融余额**: {{ "%.0f"|format(thermometer.margin.balance_yi) }}亿 ({{ "%+.0f"|format(thermometer.margin.change_yi) }}亿, {{ thermometer.margin.trade_date }})
+{% endif %}
+
+{% endif %}
+{% if sector_signals %}
+## 板块聚合信号
+
+| 板块 | 只数 | 涨/跌 | 中位涨跌幅 | 异动数 |
+|------|------|-------|-----------|--------|
+{% for s in sector_signals %}
+| {{ s.sector }} | {{ s.total }} | {{ s.up_count }}/{{ s.down_count }} | {{ "%+.2f"|format(s.median_change_pct) }}% | {{ s.anomaly_count }} |
+{% endfor %}
+
+{% endif %}
 ## 市场概览
 
 {{ market_summary }}
@@ -24,13 +73,15 @@
 {% endfor %}
 {% endif %}
 
-{% if anomalies %}
+{% if anomaly_rows %}
 ## 异常波动信号
 
-| 股票 | 代码 | 异常类型 | 严重程度 | 详情 |
-|------|------|----------|----------|------|
-{% for a in anomalies %}
-| {{ a.name }} | {{ a.symbol }} | {{ a.anomaly_type.value }} | {{ a.severity.value }} | {{ a.details | tojson }} |
+> 同一股票的多个信号已合并; 预测性信号: distribution_warning=派发预警, volume_dryup=地量(Markdown尾声候选), lone_strength=独苗背离(补跌风险), momentum_exhaustion=量能衰竭
+
+| 股票 | 代码 | 信号 | 严重程度 | 详情 |
+|------|------|------|----------|------|
+{% for r in anomaly_rows %}
+| {{ r.name }} | {{ r.symbol }} | {{ r.types | join(", ") }} | {{ r.severity }} | {{ r.details | tojson }} |
 {% endfor %}
 
 {% for analysis in analyses %}
@@ -43,6 +94,42 @@
 今日无异常波动信号。
 {% endif %}
 
+{% if fund_flows %}
+## 主力资金流向 (watchlist A股)
+
+| 股票 | 代码 | 主力净流入(亿) | 净占比 |
+|------|------|---------------|--------|
+{% for f in fund_flows[:10] %}
+| {{ f.name }} | {{ f.symbol }} | {{ "%+.2f"|format(f.main_net_inflow_yi) }} | {{ "%+.2f"|format(f.main_net_pct) }}% |
+{% endfor %}
+{% if fund_flows | length > 20 %}
+| ... | ... | ... | ... |
+{% endif %}
+{% for f in fund_flows[10:][-10:] %}
+| {{ f.name }} | {{ f.symbol }} | {{ "%+.2f"|format(f.main_net_inflow_yi) }} | {{ "%+.2f"|format(f.main_net_pct) }}% |
+{% endfor %}
+
+{% endif %}
+{% if lhb_entries %}
+## 龙虎榜命中 (近3日)
+
+| 股票 | 代码 | 上榜日 | 原因 | 净买额(亿) |
+|------|------|--------|------|-----------|
+{% for e in lhb_entries %}
+| {{ e.name }} | {{ e.symbol }} | {{ e.trade_date }} | {{ e.reason }} | {{ "%+.2f"|format(e.net_buy_yi) }} |
+{% endfor %}
+
+{% endif %}
+{% if calendar_events %}
+## 未来风险日历
+
+| 日期 | 类型 | 标的 | 详情 |
+|------|------|------|------|
+{% for e in calendar_events %}
+| {{ e.event_date }} | {{ e.category }} | {{ e.name }}({{ e.symbol }}) | {{ e.detail }} |
+{% endfor %}
+
+{% endif %}
 {% if hypothesis_updates %}
 ## 投资假设追踪
 
@@ -55,6 +142,5 @@
 
 {% endfor %}
 {% endif %}
-
 ---
 *报告生成时间: {{ generated_at }}*

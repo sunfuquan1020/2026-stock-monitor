@@ -62,7 +62,7 @@ def fetch_a_share_basics(symbols: list[str]) -> dict[str, AShareBasicInfo]:
         # 腾讯返回 GBK 编码
         text = resp.content.decode("gbk", errors="ignore")
     except Exception as e:
-        logger.warning(f"腾讯财经基本面请求失败: {e}")
+        logger.warning(f"腾讯财经基本面请求失败: {str(e)[:120]}")
         return {}
 
     result: dict[str, AShareBasicInfo] = {}
@@ -134,7 +134,7 @@ def fetch_a_share_kline_mootdx(symbol: str, bars: int = 40) -> list[DailyQuote]:
         client = Quotes.factory(market="std")
         df = client.bars(symbol=symbol, category=4, offset=bars)
     except Exception as e:
-        logger.warning(f"mootdx 获取 {symbol} 行情失败: {e}")
+        logger.warning(f"mootdx 获取 {symbol} 行情失败: {str(e)[:120]}")
         return []
 
     if df is None or df.empty:
@@ -204,3 +204,105 @@ def _mootdx_row_date(row: pd.Series, idx) -> date | None:
         return pd.Timestamp(raw).date()
     except (ValueError, TypeError):
         return None
+
+
+# ═══════════════════════════════════════════════════════════
+# 资金面: 主力资金流 + 龙虎榜 (东财批量接口, 每日各一次调用)
+# ═══════════════════════════════════════════════════════════
+
+
+def fetch_fund_flow_rank(symbols: list[str]):
+    """当日主力资金流排行(全市场一次调用), 过滤 watchlist。
+
+    Returns:
+        (list[FundFlowInfo] 按主力净流入排序, warnings)
+    """
+    from src.models import FundFlowInfo
+
+    wanted = set(symbols)
+    try:
+        import akshare as ak
+
+        df = ak.stock_individual_fund_flow_rank(indicator="今日")
+    except Exception as e:
+        logger.warning(f"Fund flow fetch failed: {e}")
+        return [], [f"主力资金流获取失败: {str(e)[:120]}"]
+
+    flows = []
+    try:
+        for _, row in df.iterrows():
+            code = str(row.get("代码", "")).zfill(6)
+            if code not in wanted:
+                continue
+            net = row.get("今日主力净流入-净额")
+            pct = row.get("今日主力净流入-净占比")
+            try:
+                net_yi = float(net) / 1e8
+                pct_f = float(pct)
+            except (TypeError, ValueError):
+                continue
+            flows.append(
+                FundFlowInfo(
+                    symbol=code,
+                    name=str(row.get("名称", "")),
+                    main_net_inflow_yi=round(net_yi, 2),
+                    main_net_pct=round(pct_f, 2),
+                )
+            )
+    except Exception as e:
+        logger.warning(f"Fund flow parse failed: {e}")
+        return [], [f"主力资金流解析失败: {str(e)[:120]}"]
+
+    flows.sort(key=lambda f: f.main_net_inflow_yi, reverse=True)
+    return flows, []
+
+
+def fetch_lhb_hits(symbols: list[str], days_back: int = 3):
+    """近N日龙虎榜(全市场一次调用), 过滤 watchlist 命中。
+
+    游资票一眼定性: 上榜 + 涨幅大 = 游资一波流概率高。
+
+    Returns:
+        (list[LhbEntry], warnings)
+    """
+    from datetime import timedelta
+
+    from src.models import LhbEntry
+
+    wanted = set(symbols)
+    try:
+        import akshare as ak
+
+        end = date.today()
+        start = end - timedelta(days=days_back)
+        df = ak.stock_lhb_detail_em(
+            start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d")
+        )
+    except Exception as e:
+        logger.warning(f"LHB fetch failed: {e}")
+        return [], [f"龙虎榜获取失败: {str(e)[:120]}"]
+
+    entries = []
+    try:
+        for _, row in df.iterrows():
+            code = str(row.get("代码", "")).zfill(6)
+            if code not in wanted:
+                continue
+            net = row.get("龙虎榜净买额")
+            try:
+                net_yi = float(net) / 1e8
+            except (TypeError, ValueError):
+                net_yi = 0.0
+            entries.append(
+                LhbEntry(
+                    symbol=code,
+                    name=str(row.get("名称", "")),
+                    trade_date=str(row.get("上榜日", ""))[:10],
+                    reason=str(row.get("上榜原因", "")),
+                    net_buy_yi=round(net_yi, 2),
+                )
+            )
+    except Exception as e:
+        logger.warning(f"LHB parse failed: {e}")
+        return [], [f"龙虎榜解析失败: {str(e)[:120]}"]
+    return entries, []
