@@ -16,6 +16,7 @@ from src.hypothesis import check_hypotheses, save_hypothesis_history
 from src.llm import LLMProvider, create_provider
 from src.market import build_thermometer
 from src.models import AnalysisResult, DailyQuote, ReportData, StockConfig
+from src.net import force_ipv4_for_domestic_hosts
 from src.news import analyze_anomaly, build_websearch_queries, collect_websearch_queries, fetch_news
 from src.report import cleanup_old_reports, generate_report, generate_today_report, save_report
 
@@ -24,6 +25,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# 国内数据源(东财/新浪/腾讯)的 IPv6 路由在部分网络下会在 TLS 握手后被重置,
+# 表现为 SSLEOFError。强制这些域名走 IPv4, 必须在任何网络请求之前安装。
+force_ipv4_for_domestic_hosts()
 
 
 def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = False) -> str | None:
@@ -127,7 +132,8 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
     # Step 2d: A股资金面 (主力资金流 + 龙虎榜)
     fund_flows, lhb_entries = [], []
     try:
-        fund_flows, ff_warnings = fetch_fund_flow_rank(a_share_symbols)
+        a_share_names = {s.symbol: s.name for s in watchlist if s.market == "A股"}
+        fund_flows, ff_warnings = fetch_fund_flow_rank(a_share_symbols, a_share_names)
         data_warnings.extend(ff_warnings)
         lhb_entries, lhb_warnings = fetch_lhb_hits(a_share_symbols)
         data_warnings.extend(lhb_warnings)

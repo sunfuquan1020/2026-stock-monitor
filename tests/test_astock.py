@@ -159,3 +159,117 @@ class TestFetchABasics:
 
         monkeypatch.setattr("src.astock.httpx.get", boom)
         assert fetch_a_share_basics(["600519"]) == {}
+
+
+# ── 主力资金流: 东财失败时的新浪兜底 ─────────────────────────
+class TestFundFlowSinaFallback:
+    """东财 push2 限流时, 资金流应回退到新浪逐只查询。"""
+
+    SAMPLE = [{
+        "opendate": "2026-07-20",
+        "netamount": "3764778706.78",
+        "ratioamount": "0.273017",
+    }]
+
+    def _stub_client(self, monkeypatch, payload_for):
+        """用假的 httpx.Client 替换真实网络调用。"""
+        import src.astock as astock
+
+        class FakeResp:
+            def __init__(self, data):
+                self._data = data
+
+            def raise_for_status(self):
+                if self._data is None:
+                    raise RuntimeError("boom")
+
+            def json(self):
+                return self._data
+
+        class FakeClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, url, params=None):
+                return FakeResp(payload_for(params["daima"]))
+
+        monkeypatch.setattr(astock.httpx, "Client", lambda **kw: FakeClient())
+
+    def test_maps_sina_fields_to_fund_flow(self, monkeypatch):
+        from src.astock import _fetch_fund_flow_sina
+
+        self._stub_client(monkeypatch, lambda d: self.SAMPLE)
+        flows, warnings = _fetch_fund_flow_sina(["600519"], {"600519": "贵州茅台"})
+
+        assert warnings == []
+        assert len(flows) == 1
+        assert flows[0].symbol == "600519"
+        assert flows[0].name == "贵州茅台"
+        assert flows[0].main_net_inflow_yi == 37.65  # 元 -> 亿
+        assert flows[0].main_net_pct == 27.3         # 小数 -> 百分比
+
+    def test_sorted_by_net_inflow_desc(self, monkeypatch):
+        from src.astock import _fetch_fund_flow_sina
+
+        payloads = {
+            "sh600519": [{"netamount": "1e8", "ratioamount": "0.1"}],
+            "sz000001": [{"netamount": "5e8", "ratioamount": "0.2"}],
+        }
+        self._stub_client(monkeypatch, lambda d: payloads[d])
+        flows, _ = _fetch_fund_flow_sina(["600519", "000001"])
+
+        assert [f.symbol for f in flows] == ["000001", "600519"]
+
+    def test_partial_failure_keeps_successful_symbols(self, monkeypatch):
+        from src.astock import _fetch_fund_flow_sina
+
+        self._stub_client(
+            monkeypatch,
+            lambda d: self.SAMPLE if d == "sh600519" else None,
+        )
+        flows, warnings = _fetch_fund_flow_sina(["600519", "000001"])
+
+        assert warnings == []
+        assert [f.symbol for f in flows] == ["600519"]
+
+    def test_all_failed_returns_warning(self, monkeypatch):
+        from src.astock import _fetch_fund_flow_sina
+
+        self._stub_client(monkeypatch, lambda d: None)
+        flows, warnings = _fetch_fund_flow_sina(["600519", "000001"])
+
+        assert flows == []
+        assert len(warnings) == 1
+        assert "主力资金流获取失败" in warnings[0]
+
+    def test_empty_symbols_no_warning(self):
+        from src.astock import _fetch_fund_flow_sina
+
+        assert _fetch_fund_flow_sina([]) == ([], [])
+
+    def test_eastmoney_failure_triggers_sina(self, monkeypatch):
+        """akshare 抛 SSLError 时应走兜底而不是直接报警告。"""
+        import src.astock as astock
+        from src.astock import fetch_fund_flow_rank
+
+        called = {}
+
+        def fake_sina(symbols, names=None):
+            called["hit"] = (symbols, names)
+            return ["sentinel"], []
+
+        monkeypatch.setattr(astock, "_fetch_fund_flow_sina", fake_sina)
+        import akshare as ak
+        monkeypatch.setattr(
+            ak, "stock_individual_fund_flow_rank",
+            lambda **kw: (_ for _ in ()).throw(OSError("SSL EOF")),
+        )
+
+        flows, warnings = fetch_fund_flow_rank(["600519"], {"600519": "贵州茅台"})
+
+        assert flows == ["sentinel"]
+        assert warnings == []
+        assert called["hit"] == (["600519"], {"600519": "贵州茅台"})

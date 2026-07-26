@@ -211,8 +211,14 @@ def _mootdx_row_date(row: pd.Series, idx) -> date | None:
 # ═══════════════════════════════════════════════════════════
 
 
-def fetch_fund_flow_rank(symbols: list[str]):
+def fetch_fund_flow_rank(symbols: list[str], names: dict[str, str] | None = None):
     """当日主力资金流排行(全市场一次调用), 过滤 watchlist。
+
+    东财 push2 对突发请求有IP级限流(连接直接被关闭), 失败时回退到新浪逐只查询。
+
+    Args:
+        symbols: A股6位代码列表
+        names: {代码: 名称}, 新浪兜底源不返回名称时用于补全
 
     Returns:
         (list[FundFlowInfo] 按主力净流入排序, warnings)
@@ -225,8 +231,8 @@ def fetch_fund_flow_rank(symbols: list[str]):
 
         df = ak.stock_individual_fund_flow_rank(indicator="今日")
     except Exception as e:
-        logger.warning(f"Fund flow fetch failed: {e}")
-        return [], [f"主力资金流获取失败: {str(e)[:120]}"]
+        logger.warning(f"东财资金流失败, 回退新浪: {str(e)[:120]}")
+        return _fetch_fund_flow_sina(symbols, names)
 
     flows = []
     try:
@@ -253,7 +259,82 @@ def fetch_fund_flow_rank(symbols: list[str]):
         logger.warning(f"Fund flow parse failed: {e}")
         return [], [f"主力资金流解析失败: {str(e)[:120]}"]
 
+    if not flows:
+        logger.warning("东财资金流未命中 watchlist, 回退新浪")
+        return _fetch_fund_flow_sina(symbols, names)
+
     flows.sort(key=lambda f: f.main_net_inflow_yi, reverse=True)
+    return flows, []
+
+
+# 新浪资金流(逐只), 东财 push2 限流时的兜底源
+SINA_FUND_FLOW_URL = (
+    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+    "MoneyFlow.ssl_qsfx_zjlrqs"
+)
+SINA_FUND_FLOW_HEADERS = {
+    "User-Agent": TENCENT_USER_AGENT,
+    "Referer": "https://finance.sina.com.cn/",
+}
+SINA_REQUEST_TIMEOUT = 10.0
+
+
+def _fetch_fund_flow_sina(symbols: list[str], names: dict[str, str] | None = None):
+    """新浪逐只资金流兜底。
+
+    字段: netamount=主力净流入(元), ratioamount=净占比(小数)。
+    单只失败不影响其他, 全部失败才报警告。
+    """
+    from src.models import FundFlowInfo
+
+    if not symbols:
+        return [], []
+
+    flows = []
+    failures = 0
+    with httpx.Client(
+        headers=SINA_FUND_FLOW_HEADERS, timeout=SINA_REQUEST_TIMEOUT
+    ) as client:
+        for code in symbols:
+            try:
+                resp = client.get(
+                    SINA_FUND_FLOW_URL,
+                    params={
+                        "daima": f"{_a_share_prefix(code)}{code}",
+                        "num": 1,
+                        "sort": "opendate",
+                        "asc": 0,
+                    },
+                )
+                resp.raise_for_status()
+                rows = resp.json()
+            except Exception as e:
+                failures += 1
+                logger.debug(f"新浪资金流 {code} 失败: {str(e)[:80]}")
+                continue
+
+            if not rows:
+                continue
+            row = rows[0]
+            try:
+                net_yi = float(row["netamount"]) / 1e8
+                pct = float(row["ratioamount"]) * 100
+            except (KeyError, TypeError, ValueError):
+                continue
+            flows.append(
+                FundFlowInfo(
+                    symbol=code,
+                    name=(names or {}).get(code, ""),
+                    main_net_inflow_yi=round(net_yi, 2),
+                    main_net_pct=round(pct, 2),
+                )
+            )
+
+    if not flows:
+        return [], [f"主力资金流获取失败: 东财与新浪均不可用 ({failures}只请求失败)"]
+
+    flows.sort(key=lambda f: f.main_net_inflow_yi, reverse=True)
+    logger.info(f"新浪资金流兜底成功: {len(flows)}/{len(symbols)} 只")
     return flows, []
 
 
