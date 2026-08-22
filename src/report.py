@@ -79,6 +79,8 @@ def generate_report(data: ReportData, template_dir: str) -> str:
         calendar_events=data.calendar_events,
         fund_flows=data.fund_flows,
         lhb_entries=data.lhb_entries,
+        northbound=data.northbound,
+        northbound_top10=data.northbound_top10,
         data_warnings=data.data_warnings,
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )

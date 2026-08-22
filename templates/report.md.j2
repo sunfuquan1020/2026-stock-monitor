@@ -15,11 +15,23 @@
 近5日轨迹: {{ thermometer.regime_history | join(" → ") if thermometer.regime_history else "无历史" }}
 
 {% if thermometer.cn_indexes %}
-| 指数 | 点位 | 涨跌幅 |
-|------|------|--------|
+{% set tape_map = {} %}
+{% for t in thermometer.index_tapes %}{% set _ = tape_map.update({t.name: t}) %}{% endfor %}
+| 指数 | 点位 | 涨跌幅 | 量比(20日) | 量能 | vs MA20 | vs MA60 | 距60日高 |
+|------|------|--------|-----------|------|---------|---------|---------|
 {% for q in thermometer.cn_indexes %}
-| {{ q.name }} | {{ "%.2f"|format(q.price) }} | {{ "%+.2f"|format(q.change_pct) }}% |
+{% set t = tape_map.get(q.name) %}
+| {{ q.name }} | {{ "%.2f"|format(q.price) }} | {{ "%+.2f"|format(q.change_pct) }}% | {% if t %}{{ "%.2f"|format(t.vol_ratio_20d) }}{% else %}—{% endif %} | {% if t %}{{ t.vol_trend }}{% else %}—{% endif %} | {% if t %}{{ "%+.1f"|format(t.vs_ma20_pct) }}%{% else %}—{% endif %} | {% if t %}{{ "%+.1f"|format(t.vs_ma60_pct) }}%{% else %}—{% endif %} | {% if t %}{{ "%+.1f"|format(t.dist_60d_high_pct) }}%{% else %}—{% endif %} |
 {% endfor %}
+{% if thermometer.volume_price_note %}
+
+**指数量价**: {{ thermometer.volume_price_note }}
+{% endif %}
+{% if thermometer.style_strength %}
+
+**小盘相对强度** (中证1000/沪深300): {{ "%.4f"|format(thermometer.style_strength.ratio) }} ｜ 5日 {{ "%+.2f"|format(thermometer.style_strength.chg_5d_pct) }}% ｜ 20日 {{ "%+.2f"|format(thermometer.style_strength.chg_20d_pct) }}% ｜ 60日 {{ "%+.2f"|format(thermometer.style_strength.chg_60d_pct) }}%
+> 比值上行 = 小盘跑赢大盘。主线发力端常在中小市值, 短期修复与中期风格反转经常方向相反, 三个尺度要一起看。
+{% endif %}
 {% endif %}
 {% if thermometer.global_indexes %}
 
@@ -94,19 +106,39 @@
 今日无异常波动信号。
 {% endif %}
 
+{% if northbound and northbound.total_net_yi is not none %}
+## 北向资金 (同花顺, 市场级)
+
+沪股通 {{ "%+.2f"|format(northbound.hgt_net_yi) if northbound.hgt_net_yi is not none else "—" }}亿 ｜ 深股通 {{ "%+.2f"|format(northbound.sgt_net_yi) if northbound.sgt_net_yi is not none else "—" }}亿 ｜ **合计 {{ "%+.2f"|format(northbound.total_net_yi) }}亿** (截至 {{ northbound.as_of }})
+
+{% endif %}
+{% if northbound_top10 %}
+## 北向十大活跃股 (HKEX 官方)
+
+> ⚠️ HKEX 只披露**成交额**不含买卖拆分，因此无净买入方向；用于判断「北向在交易什么」，不能当资金流向证据。
+
+| 市场 | 排名 | 股票 | 代码 | 成交额(亿) |
+|------|------|------|------|-----------|
+{% for t in northbound_top10 %}
+| {{ t.market }} | {{ t.rank }} | {{ t.name }} | {{ t.code }} | {{ "%.2f"|format(t.turnover_yi) }} |
+{% endfor %}
+
+{% endif %}
 {% if fund_flows %}
 ## 主力资金流向 (watchlist A股)
+
+> 数据源: {{ fund_flows[0].source }}{% if fund_flows[0].source == "新浪" %} — 新浪按大单方向聚合，与东财口径不同，不提供净占比{% endif %}
 
 | 股票 | 代码 | 主力净流入(亿) | 净占比 |
 |------|------|---------------|--------|
 {% for f in fund_flows[:10] %}
-| {{ f.name }} | {{ f.symbol }} | {{ "%+.2f"|format(f.main_net_inflow_yi) }} | {{ "%+.2f"|format(f.main_net_pct) }}% |
+| {{ f.name }} | {{ f.symbol }} | {{ "%+.2f"|format(f.main_net_inflow_yi) }} | {{ "%+.2f%%"|format(f.main_net_pct) if f.main_net_pct is not none else "—" }} |
 {% endfor %}
 {% if fund_flows | length > 20 %}
 | ... | ... | ... | ... |
 {% endif %}
 {% for f in fund_flows[10:][-10:] %}
-| {{ f.name }} | {{ f.symbol }} | {{ "%+.2f"|format(f.main_net_inflow_yi) }} | {{ "%+.2f"|format(f.main_net_pct) }}% |
+| {{ f.name }} | {{ f.symbol }} | {{ "%+.2f"|format(f.main_net_inflow_yi) }} | {{ "%+.2f%%"|format(f.main_net_pct) if f.main_net_pct is not none else "—" }} |
 {% endfor %}
 
 {% endif %}

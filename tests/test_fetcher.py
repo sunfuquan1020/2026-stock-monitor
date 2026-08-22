@@ -290,7 +290,7 @@ class TestFetchDailyQuotes:
 
     def test_hk_symbol_routed_to_yahoo(self, tmp_path):
         # 港股代码应路由到 Yahoo chart
-        hk_quotes = [make_us_quote(symbol="00700", d=date(2026, 6, 18), change_pct=0.5)]
+        hk_quotes = [make_us_quote(symbol="00700", d=date.today(), change_pct=0.5)]
         with patch("src.fetcher.fetch_kline_yahoo", return_value=hk_quotes) as mock_yahoo:
             result = fetch_daily_quotes(
                 ["00700"], days=30,
@@ -323,7 +323,7 @@ class TestFetchDailyQuotes:
 
     def test_mootdx_fallback_used_when_akshare_empty(self, tmp_path):
         # AKShare 返回空时，应改用 mootdx 兜底的数据
-        fallback_quotes = [make_us_quote(symbol="600519", d=date(2026, 6, 18), change_pct=0.0)]
+        fallback_quotes = [make_us_quote(symbol="600519", d=date.today(), change_pct=0.0)]
         with patch("src.fetcher.ak") as mock_ak, \
                 patch("src.fetcher.fetch_a_share_kline_mootdx",
                       return_value=fallback_quotes) as mock_mootdx:

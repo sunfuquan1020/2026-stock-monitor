@@ -102,6 +102,83 @@ python -m src.main --config config.yaml --today
 python -m src.main --config config.yaml --dry-run --today
 ```
 
+### 使用 Web 工作台
+
+Web 工作台将现有 `output/` 中的日报、分析、判断和关注池转为可浏览界面。它是只读界面，不会修改分析产物、运行新分析或触发交易。
+
+#### 首次安装
+
+在项目根目录执行：
+
+```bash
+cd /Volumes/SSD2T/Users/fortune/2026-投资/2026-stock-monitor
+
+# 安装 Python Web 依赖
+uv sync --extra dev --extra web
+
+# 安装前端依赖并生成生产版界面
+npm --prefix web install
+npm --prefix web run build
+```
+
+#### 日常启动
+
+之后每次使用只需执行：
+
+```bash
+cd /Volumes/SSD2T/Users/fortune/2026-投资/2026-stock-monitor
+.venv/bin/stock-monitor-web
+```
+
+终端显示以下信息时表示启动成功：
+
+```text
+Uvicorn running on http://127.0.0.1:8000
+```
+
+然后在浏览器打开：
+
+- 工作台：[http://127.0.0.1:8000](http://127.0.0.1:8000)
+- OpenAPI 文档：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+
+终端按 `Control + C` 可停止服务。
+
+#### 界面功能
+
+- **总览**：查看市场 Regime、数据时点、质量警告和 A/B/C 机会分档。
+- **判断台账**：查看待验证判断、证伪条件和上期验证记录。
+- **报告库**：阅读历史 Markdown 日报和分析文档。
+- **刷新**：点击右上角刷新按钮，重新读取 `output/` 中的最新数据。
+- **主题**：点击右上角月亮/太阳按钮，切换明暗主题。
+
+#### 更新界面
+
+当 `web/` 中的前端代码或依赖发生变化时，重新构建：
+
+```bash
+npm --prefix web install
+npm --prefix web run build
+```
+
+新的 `/stock` 分析产物写入 `output/` 后不需重新构建前端，在页面点击刷新即可。
+
+#### 常见问题
+
+- **页面显示「frontend is not built」**：运行 `npm --prefix web run build`。
+- **提示端口 8000 已占用**：改用 `.venv/bin/stock-monitor-web --port 8001`，然后打开 `http://127.0.0.1:8001`。
+- **需要读取其他产物目录**：使用 `.venv/bin/stock-monitor-web --output-dir /path/to/output`。
+- **数据日期没更新**：先确认 `output/` 已有新产物，再点击页面右上角刷新按钮。
+
+#### 整合边界
+
+Web 界面参考 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 的 React/Vite + FastAPI 工作台形态，但保留本项目 `/stock` 分析流程和产物为唯一权威数据源：
+
+```text
+/stock 分析流程 → output/ 版本化产物 → 只读 FastAPI 适配层 → React 工作台
+```
+
+上游项目归属与许可信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 ## 配置说明
 
 配置文件 `config.yaml` 包含以下部分:

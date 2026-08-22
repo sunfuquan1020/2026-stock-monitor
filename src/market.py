@@ -13,6 +13,7 @@ from urllib.parse import quote as urlquote
 
 import httpx
 
+from src.index_kline import describe_volume_price, fetch_index_tapes
 from src.models import (
     DailyQuote,
     IndexQuote,
@@ -28,11 +29,16 @@ TENCENT_INDEX_URL = "https://qt.gtimg.cn/q="
 TENCENT_TIMEOUT = 10.0
 
 # 腾讯简版行情 (s_ 前缀): 1~名称~代码~现价~涨跌~涨跌幅~...
+# 宽基三只(沪深300/中证500/中证1000)用于判断风格在大盘端还是中小市值端 ——
+# 主线的发力端经常在中小市值, 只看上证/创业板会漏掉。
 CN_INDEXES = [
     ("s_sh000001", "上证指数"),
     ("s_sz399001", "深证成指"),
     ("s_sz399006", "创业板指"),
     ("s_sh000688", "科创50"),
+    ("s_sh000300", "沪深300"),
+    ("s_sh000905", "中证500"),
+    ("s_sh000852", "中证1000"),
 ]
 
 YAHOO_CHART_URL = "https://query2.finance.yahoo.com/v8/finance/chart/"
@@ -301,9 +307,14 @@ def build_thermometer(
     watchlist: list[StockConfig],
     output_dir: str,
 ) -> MarketThermometer:
-    """组装市场体温计（每路数据独立容错）。"""
+    """组装市场体温计（每路数据独立容错）。
+
+    ⚠️ index_tapes/style_strength 只做呈现, **不参与 classify_regime** ——
+    regime 序列必须跨日可比, 改判据会让历史轨迹失去意义。
+    """
     cn_indexes = fetch_cn_indexes()
     global_indexes = fetch_global_indexes()
+    index_tapes, style_strength = fetch_index_tapes()
     breadth = fetch_breadth()
     margin = fetch_margin()
 
@@ -311,9 +322,16 @@ def build_thermometer(
     regime, reasons = classify_regime(cn_indexes, breadth, sector_stats)
     history = update_regime_history(output_dir, date.today(), regime, reasons)
 
+    vp_note = describe_volume_price(
+        index_tapes, {q.name: q.change_pct for q in cn_indexes}
+    )
+
     return MarketThermometer(
         cn_indexes=tuple(cn_indexes),
         global_indexes=tuple(global_indexes),
+        index_tapes=tuple(index_tapes),
+        style_strength=style_strength,
+        volume_price_note=vp_note,
         breadth=breadth,
         margin=margin,
         regime=regime,
