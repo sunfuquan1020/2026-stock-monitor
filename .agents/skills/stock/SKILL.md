@@ -1,12 +1,17 @@
 ---
 name: stock
-description: "运行每日股票监控系统，生成今日报告。Pipeline 只抓数据+检测异动(秒级)，异动分析由 Codex(agent) 直接完成，无需 LLM API key。包含A股+美股+港股。"
+description: "运行每日股票监控系统，生成今日报告。Pipeline 只抓数据+检测异动(秒级)，异动分析由当前 agent(Claude Code 或 Codex)直接完成，无需 LLM API key。包含A股+美股+港股。"
 ---
+
+<!--
+  权威版本(唯一真源)。Claude Code 读 .claude/skills/stock/SKILL.md(指向本文件的软链)，
+  Codex 读本文件(经 ~/.codex/skills/stock-monitor 转引)。只改这里，不要在别处另存副本。
+-->
 
 # /stock - 每日股票监控
 
 运行A股+美股+港股每日监控系统。**Pipeline 只负责抓数据 + 检测异动(几十秒)，
-异动的 AI 分析由你(Codex agent)在对话里直接完成** —— 不调用任何 LLM API，
+异动的 AI 分析由你(当前 agent：Claude Code 或 Codex)在对话里直接完成** —— 不调用任何 LLM API，
 因此用 `--dry-run` 跳过 pipeline 内置的 LLM 调用(那个免费模型极慢)。
 
 ## 执行步骤
@@ -19,8 +24,8 @@ cd /Volumes/SSD2T/Users/fortune/2026-投资/2026-stock-monitor
 > 不要去掉 `--dry-run`：带上它才不会触发那个慢速免费 LLM；分析交给你来做。
 
 2. 如果 pipeline 失败，检查错误原因：
-   - AKShare 获取A股失败 → 可能限流，稍后重试或检查网络
-   - 美股/港股获取失败 → 检查网络 / `FINNHUB_API_KEY`（美股今日报价，可选；Yahoo 仍能回填历史）
+   - AKShare 获取A股失败 → 自动转腾讯前复权日线，再失败才尝试 mootdx；三路失败必须保留告警
+   - 美股/港股获取失败 → 检查网络 / Finnhub（`FINNHUB_API_KEY` 已在 `~/.zshrc` 配置，`run.sh` 启动时自动 source 加载；排查时只检查变量是否已加载，不打印、不修改 key；历史线 Yahoo 失败后转新浪）
    - 数据全空 → 检查 `.venv` 与网络
 
 3. 读取 pipeline 生成的数据报告：
@@ -37,14 +42,14 @@ cat output/$(date +%Y-%m-%d).md
    - 市场概览 / A股基本面 / 美股港股基本面
    - **异常波动信号**（同股已合并，severity 已按个股波动率 z-score 校准）
    - **主力资金流向**（watchlist A股 Top/Bottom10）+ **龙虎榜命中**（游资定性铁证）
-   - **未来风险日历**：美股财报 / A股解禁 / 新股申购 → **事前预警，分析里必须引用**
+   - **未来风险日历（重大事件预警）**：A股定期报告预约披露日(30天) / A股分红送转除权除息(14天) / 美股财报(Nasdaq) / 港股财报+美港股除息(Yahoo, 30天) / A股解禁 / 新股申购，带倒计时 `T-n` 与紧急度 🔴(≤3天) 🟡(≤7天) → **事前预警，分析里必须引用**
 
 4. **昨日判断验证（先复盘再分析，防止重复犯错）**：
    - 读取最近一份 `output/judgments/*.json`（按文件名取最新）
    - 逐条对照今日数据判定：`确认 / 证伪 / 待定`
    - 在 analysis.md 开头写「昨日判断验证」小节；**连续证伪同方向判断 = 市场无主线的确认信号**
 
-5. **Codex 直接分析异动（核心步骤，代替内置 LLM）**：
+5. **Agent 直接分析异动（核心步骤，代替内置 LLM）**：
    - 从「异常波动信号」表读取全部异动；**预测性信号优先分析**（见下表），它们先于价格崩溃：
 
    | 信号 | 含义 | 框架对应操作 |
@@ -58,8 +63,45 @@ cat output/$(date +%Y-%m-%d).md
    - **应用「多空逻辑 × 威科夫」分析框架**，判断主线/非主线、量价结构阶段；regime 直接引用体温计
    - 对每个 **high** 异动写简明分析：①可能原因 ②短期风险/机会 ③关注信号
    - **medium** 异动汇总成表，逐行一句话点评
-   - 引用「未来风险日历」：财报/解禁临近的持仓标的必须提示
-   - 把分析写入 `output/$(date +%Y-%m-%d)-analysis.md`（标题「🤖 Codex 异动分析 -- 日期」），并在对话中给出要点
+   - 引用「未来风险日历」，在 analysis.md 的机会清单**之前**单列「⏰ 重大事件预警」：
+     - 🔴 T-3 内的 watchlist/关注池标的逐只写**事件前预案**：业绩披露/财报 → 事件落地前不新开仓、已有仓位决定是否减仓或设好止损，写明"超预期/不及预期"各自怎么办；除权除息 → 提醒价格缺口是除权不是下跌，量价/均线信号当日需按复权口径看；解禁 → 评估抛压占流通比例
+     - 🟡 T-7 内的列表即可，标注与当前持仓/机会清单的关系
+     - 港股/美股财报标注"日期预估"的，在预警里注明未确认，临近时再核实
+     - 业绩预告、重大资产重组、增减持、回购等**未排期**的突发公告不在日历里：对 high 异动标的用 WebSearch/巨潮公告补查，发现后并入预警
+   - 把分析写入 `output/$(date +%Y-%m-%d)-analysis.md`（标题「🤖 <Claude|Codex> 异动分析 -- 日期」，按当前 agent 填），并在对话中给出要点
+
+5.5. **输出「今日机会清单」（每天必出，写在 analysis.md 里靠前的位置）**：
+
+   这是**按框架条件做的筛选结果**，不是买卖指令 —— 每条都要给出「成立需要什么」和「什么情况下作废」，
+   由你自己拿着条件去对盘面，而不是照单执行。
+
+   分三档，**每档都要写，没有货就明写「今日无」并说明卡在哪一项**：
+
+   | 档 | 含义 | 入选条件 |
+   |----|------|---------|
+   | 🟢 **A档 可动手** | 逻辑+业绩+买点 三要素齐全 | 属已定级A主线 / 业绩确定且释放快 / 处于吸筹或拉升早期 / **当前价离买点近** |
+   | 🟡 **B档 等买点** | 逻辑硬但买点差 | 定性成立(标准SOS、主线龙头)，但已加速或离均线太远 → 写明**等什么价位/形态** |
+   | 🔵 **C档 观察** | 缺一项，等数据补齐 | 缺事件驱动 / 缺量能确认 / 缺板块第2日验证 / 左侧地量待抛压净尽 |
+
+   每条固定六个字段，缺一不可：
+
+   ```
+   标的(代码) ｜ 归类A/B/C ｜ 威科夫阶段 ｜ 机会来源(一句话) ｜
+   成立触发条件(具体价位/量比/资金阈值) ｜ 作废条件(具体)
+   ```
+
+   硬性纪律（违反即不得入选）：
+   - **A档必须真的近买点** —— 「加速后不追」「离买点太远不追」优先于「看好」。看好但买点差 = B档，不是A档
+   - **缺三要素中任一项 → 最高只能进 C档**（逻辑+业绩+买点是「与」不是「或」）
+   - **未定级板块的个股不进 A档**（主线定级须至少2个交易日验证）
+   - **量能不确认不进 A档**：大涨+缩量 / 大涨+平量 都只能是 B/C 档
+   - **数据源失效时不得凭猜测填档** —— 资金流/成交量缺失就在该条标注「资金未验证」并降一档
+   - 同时给出「**今日退出清单**」：昨日在册但已触发作废条件的，写明退出理由
+
+   - **事件闸门**：业绩披露/财报在 T-3 内的标的**不得进 A 档**(最高 B 档，写明"等事件落地后再评估")——多空逻辑：重大数据发布前避免重仓入场
+
+   ⚠️ 每日机会清单必须与 `focus_list.json` 的 `focus_list_core` / `observation_only` / `avoid_dont_catch_knife` 保持一致，
+   不允许两处结论互相矛盾。
 
 6. **写入今日判断存档（复盘闭环）**：
    - 保存 `output/judgments/$(date +%Y-%m-%d).json`，schema：
@@ -78,11 +120,12 @@ cat output/$(date +%Y-%m-%d).md
 
 9. 汇总输出：
    - **Regime + 近5日轨迹**（降档必须醒目提示）
+   - **今日机会清单 A/B/C 三档**（对话里就要给出，不能只留在文件里；A档为空要明说卡在哪）
    - 各市场数据获取情况（A股/美股/港股 数量）+ 数据质量警告
    - 异动数量；high/medium 分布；预测性信号单独列出
    - 昨日判断验证结果（确认/证伪各几条）
-   - Codex 分析要点 + analysis 文件路径 + 数据报告路径
-   - 未来风险日历要点（3日内的财报/解禁）
+   - Agent 分析要点 + analysis 文件路径 + 数据报告路径
+   - **⏰ 重大事件预警**：🔴 T-3 内逐只列出事件+预案；🟡 T-7 内列名单（对话里就要给出）
 
 ## 多空逻辑 × 威科夫 分析框架
 
@@ -153,16 +196,19 @@ cat output/$(date +%Y-%m-%d).md
 
 | 市场 | 数据源 | 依赖 |
 |------|--------|------|
-| A股 | AKShare (`ak.stock_zh_a_hist`) 主 + mootdx 兜底 | `akshare` / `mootdx` 包 |
-| 美股 | Finnhub (主) + Stooq (备) + Yahoo (历史K线) | `FINNHUB_API_KEY` 环境变量 |
+| A股 | AKShare 主 → 腾讯前复权日线 → mootdx 末级兜底 | `akshare` / `mootdx` 包；腾讯零鉴权 |
+| 美股 | Finnhub 当日报价(主, 按报价时间戳落美东交易日) → 腾讯 `qt.gtimg.cn`(备, 涨跌幅按昨收自算)；Yahoo 历史 → 新浪历史兜底 | `FINNHUB_API_KEY` 已在 `~/.zshrc` 配置，`run.sh` 启动时自动 source 加载 |
 | 港股 | Yahoo Finance chart | 无 |
-| A股指数 | 腾讯 `qt.gtimg.cn` 简版行情 (不封IP) | 无 |
+| A股指数 | 腾讯 `qt.gtimg.cn` 简版行情主 + mootdx 指数日K兜底 | `mootdx` 包（报告显示实际点位源） |
 | 外围指数 | Yahoo chart (纳指/费半/恒指) | 无 |
 | 市场宽度 | AKShare 乐咕乐股 (涨跌/涨跌停家数) | `akshare` |
 | 两融余额 | AKShare 上交所 (T+1) | `akshare` |
 | 主力资金流/龙虎榜 | AKShare 东财批量接口 | `akshare` |
-| 财报日历 | Finnhub earnings calendar | `FINNHUB_API_KEY` |
-| 解禁/新股日历 | AKShare 东财 | `akshare` |
+| 美股财报日历 | Nasdaq 官方(主) → Finnhub(备) | 同上 |
+| 港股财报 / 美港股除息日 | Yahoo quoteSummary `calendarEvents` | 无（含 isEarningsDateEstimate 预估标记） |
+| A股业绩披露预约日 | 东财 datacenter `RPT_PUBLIC_BS_APPOIN` | 无（APPOINT_PUBLISH_DATE=改期后的当前预约日） |
+| A股分红送转除权除息 | 东财 datacenter `RPT_SHAREBONUS_DET` | 无 |
+| 解禁/新股日历 | 东财 datacenter(urllib) → AKShare → 新浪 | `akshare` |
 | 全市场新闻 | WebSearch 补充 (A股/美股/港股统一) | 无 |
 
 ### 数据源维护与降级路由
@@ -175,7 +221,28 @@ cat output/$(date +%Y-%m-%d).md
 
 辅助 skill 只提供候选实现和交叉验证。只有已接入本项目 pipeline、通过测试并在
 报告中保留来源日期/血缘的结果，才能算当日覆盖。不同来源的资金流金额、盘中价与
-收盘价不得混用；缓存结果必须标注 stale，空结果与请求失败必须分开告警。
+收盘价不得混用；北交所 4/8/92 号段必须统一路由为 `bj`；缓存结果必须标注 stale，
+空结果与请求失败必须分开告警。AKShare 市场宽度与上交所两融路径使用
+12 秒默认超时，上游未显式设置超时时不得卡住整个日报管线。
+
+### 上游数据源周检（每周一次）
+
+A股/美股/港股的取数方法来自上游 [a-stock-data](https://github.com/simonlin1212/a-stock-data) 与
+[global-stock-data](https://github.com/simonlin1212/global-stock-data)，接口常变。已设每周定时任务自动检查；也可手动：
+
+```bash
+.venv/bin/python -m src.upstream_watch        # 对比 upstream_baseline.json → output/upstream/YYYY-MM-DD.md
+```
+
+- **无需同步**（无新提交，或只改 README/图片/CI）→ 结束
+- **需要同步**（改了 SKILL.md/CHANGELOG/docs/tests）→ 按顺序：
+  1. 读新提交的 diff（`gh api repos/<repo>/compare/<基线>...<新提交>`）和 CHANGELOG，列出新增/变更/下线的端点
+  2. 更新本地上游 skill `~/.agents/skills/<repo名>/SKILL.md`（`~/.claude/skills/` 下是软链，不用另改）；保留本地改写：frontmatter 的 `metadata:` 包裹、`docs/` 相对链接改成带 commit 的 GitHub 绝对链接
+  3. 判断对 `/stock` 的影响：pipeline 在用的端点(见上方数据源表)有无变更/失效/更优备源 → 需要时改 `src/` 取数与降级链并补测试（先写失败测试）；**只有接入 pipeline 且测试通过的来源才能写进数据源表**
+  4. 同步本文件（数据源表、降级路由）与 `~/.codex/skills/stock-monitor/references/source-fallbacks.md` 的上游基线表
+  5. `.venv/bin/pytest -q` 全绿 + `./run.sh --today --dry-run` 实跑一次确认数据不缺
+  6. `.venv/bin/python -m src.upstream_watch --mark-synced <repo> <新提交sha>` 推进基线
+- 不在权威项目里直接 `git pull` 上游；第三方内容保留作者与许可证声明（见 `THIRD_PARTY_NOTICES.md`）
 
 ## 注意事项
 
@@ -185,4 +252,5 @@ cat output/$(date +%Y-%m-%d).md
 - 报告输出在 `output/` 目录
 - 美股历史数据累积在 `output/us_quote_history.json`
 - Regime 历史在 `output/market_regime_history.json`；判断存档在 `output/judgments/`；关注清单在 `output/focus_list.json`
+- `--dry-run` 仍会刷新当日产物，但必须跳过旧报告清理，不得删除历史产物
 - 体温计/日历/资金面任一数据源失败只降级不中断，失败原因进「数据质量警告」

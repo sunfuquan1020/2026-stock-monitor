@@ -1,5 +1,5 @@
 # 股票每日监控系统配置
-# 数据源: A股=AKShare, 美股=Finnhub(主)+Stooq(备), 辅助=WebSearch
+# 数据源: A股=AKShare, 美股=Finnhub(主)+腾讯(备), 辅助=WebSearch
 
 # 自选股列表（A股 + 美股，按行业分组）
 watchlist:
@@ -165,7 +165,7 @@ watchlist:
     market: "A股"
 
   # ═══════════════════════════════════════════════════
-  # 美股 (Finnhub主 + Stooq备)
+  # 美股 (Finnhub主 + 腾讯备)
   # ═══════════════════════════════════════════════════
   # === 半导体 ===
   - symbol: "NVDA"

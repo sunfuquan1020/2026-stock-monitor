@@ -15,6 +15,7 @@ from datetime import date, datetime
 import httpx
 
 from src.config import MARKET_HK
+from src.fallback_sources import sina_us_kline
 from src.models import DailyQuote, GlobalStockBasicInfo
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,33 @@ def fetch_kline_yahoo(
         return []
 
     return _parse_yahoo_chart(data, symbol)
+
+
+def fetch_kline_sina(symbol: str, count: int = 120) -> list[DailyQuote]:
+    """新浪美股日线：Yahoo 失效时的独立历史 OHLCV 备源。"""
+    try:
+        rows = sina_us_kline(symbol, count)
+        quotes = []
+        previous = None
+        for row in rows:
+            close = float(row["close"])
+            open_, high, low = (float(row[key]) for key in ("open", "high", "low"))
+            volume = int(row["volume"])
+            if min(open_, high, low, close) <= 0 or volume < 0:
+                raise ValueError(f"invalid OHLCV on {row.get('date')}")
+            change_pct = (close / previous - 1) * 100 if previous else 0.0
+            quotes.append(DailyQuote(
+                symbol=symbol, date=date.fromisoformat(row["date"]),
+                open=open_, high=high, low=low, close=close, volume=volume,
+                turnover=0.0, change_pct=round(change_pct, 4),
+            ))
+            previous = close
+        if not quotes:
+            logger.warning("新浪美股日线空数据: %s", symbol)
+        return quotes
+    except (ValueError, KeyError, TypeError, OSError) as exc:
+        logger.warning("新浪美股日线失败 %s: %s", symbol, exc)
+        return []
 
 
 def _parse_yahoo_chart(data: dict, symbol: str) -> list[DailyQuote]:
@@ -243,3 +271,35 @@ def _fetch_one_basic(
         target_mean=v(fd, "targetMeanPrice"),
         recommendation=str(fd.get("recommendationKey", "") or ""),
     )
+
+
+# ── Yahoo 事件日历 (quoteSummary calendarEvents) ─────────────────
+def parse_calendar_events(data: dict) -> dict:
+    """从 quoteSummary result 中取财报日/除息日。isEarningsDateEstimate=True 表示公司未确认。"""
+    cal = data.get("calendarEvents") or {}
+    earnings = cal.get("earnings") or {}
+    dates = earnings.get("earningsDate") or []
+    ex_div = cal.get("exDividendDate") or {}
+    return {
+        "earnings_date": (dates[0].get("fmt") if dates else None) or None,
+        "earnings_is_estimate": bool(earnings.get("isEarningsDateEstimate", False)),
+        "ex_dividend_date": ex_div.get("fmt") if isinstance(ex_div, dict) else None,
+    }
+
+
+def fetch_calendar_events(yahoo_symbol: str) -> dict | None:
+    """单只美股/港股(Yahoo 代码)的财报日与除息日; 取数失败返回 None(由调用方汇总告警)。"""
+    client, crumb = _get_yahoo_crumb_client()
+    if client is None:
+        return None
+    try:
+        resp = client.get(
+            YAHOO_QUOTESUMMARY_URL + yahoo_symbol,
+            params={"modules": "calendarEvents", "crumb": crumb},
+        )
+        resp.raise_for_status()
+        results = resp.json().get("quoteSummary", {}).get("result") or [{}]
+    except Exception as e:
+        logger.warning(f"Yahoo 事件日历获取失败 {yahoo_symbol}: {e}")
+        return None
+    return parse_calendar_events(results[0] if results else {})

@@ -8,6 +8,7 @@ from src.global_stock import (
     _parse_yahoo_chart,
     fetch_global_basics,
     fetch_kline_yahoo,
+    fetch_kline_sina,
     to_yahoo_symbol,
 )
 
@@ -100,6 +101,16 @@ class TestFetchKlineYahoo:
 
         monkeypatch.setattr("src.global_stock.httpx.get", boom)
         assert fetch_kline_yahoo("AAPL", market="美股") == []
+
+
+def test_sina_kline_converts_daily_rows(monkeypatch):
+    monkeypatch.setattr("src.global_stock.sina_us_kline", lambda symbol, count: [
+        {"date": "2026-09-17", "open": 100, "high": 103, "low": 99, "close": 102, "volume": 1234},
+        {"date": "2026-09-18", "open": 102, "high": 106, "low": 101, "close": 105, "volume": 2345},
+    ])
+    quotes = fetch_kline_sina("AAPL", count=2)
+    assert [q.volume for q in quotes] == [1234, 2345]
+    assert quotes[1].change_pct == pytest.approx(2.9412)
 
 
 def make_quote_summary(price: float = 190.5) -> dict:

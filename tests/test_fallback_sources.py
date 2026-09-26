@@ -70,7 +70,9 @@ class TestSinaPrefix:
             ("000001", "sz000001"),
             ("300364", "sz300364"),
             ("920138", "bj920138"),
+            ("921001", "bj921001"),
             ("830799", "bj830799"),
+            ("400001", "bj400001"),
         ],
     )
     def test_prefix_by_market(self, code, expected):

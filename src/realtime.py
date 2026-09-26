@@ -2,7 +2,7 @@
 
 支持市场：
 - A股：新浪财经实时API（免费）
-- 美股：Finnhub（需FINNHUB_API_KEY，免费额度60次/分钟）/ Stooq（免费备选）
+- 美股：Finnhub（需FINNHUB_API_KEY，免费额度60次/分钟）/ 腾讯 qt.gtimg.cn（免费备选）
 - 港股：EOD Historical Data（需EOD_API_KEY）
 
 用法：
@@ -11,8 +11,6 @@
 """
 
 import argparse
-import csv
-import io
 import os
 import re
 import sys
@@ -160,9 +158,9 @@ def fetch_a_stock_realtime(stocks: list[StockInfo]) -> list[RealtimeQuote]:
     return quotes
 
 
-# ── 美股：Finnhub（主）/ Stooq（备） ──────────────────────────
+# ── 美股：Finnhub（主）/ 腾讯（备） ──────────────────────────
 def fetch_us_stock_realtime(stocks: list[StockInfo]) -> list[RealtimeQuote]:
-    """获取美股实时行情。优先Finnhub，无API Key时回退Stooq。"""
+    """获取美股实时行情。优先Finnhub，无API Key时回退腾讯行情。"""
     if not stocks:
         return []
 
@@ -170,8 +168,8 @@ def fetch_us_stock_realtime(stocks: list[StockInfo]) -> list[RealtimeQuote]:
     if api_key:
         return _fetch_us_finnhub(stocks, api_key)
     else:
-        print("[INFO] 未设置FINNHUB_API_KEY，使用Stooq获取美股数据", file=sys.stderr)
-        return _fetch_us_stooq(stocks)
+        print("[INFO] 未设置FINNHUB_API_KEY，使用腾讯行情获取美股数据", file=sys.stderr)
+        return _fetch_us_tencent(stocks)
 
 
 def _fetch_us_finnhub(stocks: list[StockInfo], api_key: str) -> list[RealtimeQuote]:
@@ -211,43 +209,30 @@ def _fetch_us_finnhub(stocks: list[StockInfo], api_key: str) -> list[RealtimeQuo
     return quotes
 
 
-def _fetch_us_stooq(stocks: list[StockInfo]) -> list[RealtimeQuote]:
-    """通过Stooq获取美股行情（备选方案）。"""
+def _fetch_us_tencent(stocks: list[StockInfo]) -> list[RealtimeQuote]:
+    """通过腾讯行情获取美股（备选方案, Stooq 已于 2026-09 下线）。涨跌幅按昨收计算。"""
+    from src.fetcher import _fetch_us_tencent_latest
+
     quotes = []
     for s in stocks:
-        # Stooq用短横线代替点号，如 BRK.B → brk-b
-        stooq_symbol = s.symbol.lower().replace(".", "-")
-        url = f"https://stooq.com/q/l/?s={stooq_symbol}&f=sd2t2ohlcv&h&e=csv"
-        try:
-            resp = httpx.get(url, timeout=10.0, follow_redirects=True)
-            resp.raise_for_status()
-            reader = csv.DictReader(io.StringIO(resp.text))
-            row = next(reader, None)
-            if not row:
-                continue
-
-            price = float(row.get("Close", 0))
-            open_price = float(row.get("Open", 0))
-            if open_price == 0:
-                continue
-
-            change_pct = (price - open_price) / open_price * 100
-            threshold = ANOMALY_THRESHOLDS.get(s.cap_level, 5.0)
-            is_anomaly = abs(change_pct) >= threshold
-
-            quotes.append(RealtimeQuote(
-                symbol=s.symbol,
-                name=s.name,
-                market="美股",
-                cap_level=s.cap_level,
-                price=round(price, 2),
-                change_pct=round(change_pct, 2),
-                is_anomaly=is_anomaly,
-                anomaly_reason=f"涨跌幅{change_pct:+.2f}%超过{s.cap_level}阈值±{threshold}%"
-                if is_anomaly else "",
-            ))
-        except Exception as e:
-            print(f"[WARN] Stooq获取{s.symbol}失败: {e}", file=sys.stderr)
+        latest = _fetch_us_tencent_latest(s.symbol)
+        if not latest:
+            print(f"[WARN] 腾讯获取{s.symbol}失败", file=sys.stderr)
+            continue
+        change_pct = latest[0].change_pct
+        threshold = ANOMALY_THRESHOLDS.get(s.cap_level, 5.0)
+        is_anomaly = abs(change_pct) >= threshold
+        quotes.append(RealtimeQuote(
+            symbol=s.symbol,
+            name=s.name,
+            market="美股",
+            cap_level=s.cap_level,
+            price=round(latest[0].close, 2),
+            change_pct=round(change_pct, 2),
+            is_anomaly=is_anomaly,
+            anomaly_reason=f"涨跌幅{change_pct:+.2f}%超过{s.cap_level}阈值±{threshold}%"
+            if is_anomaly else "",
+        ))
 
     return quotes
 

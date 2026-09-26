@@ -114,6 +114,7 @@ class IndexQuote:
     name: str
     price: float
     change_pct: float
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -190,7 +191,7 @@ class SectorSignal:
 class CalendarEvent:
     """未来风险日历事件。"""
     event_date: str  # ISO日期
-    category: str    # 财报 / 解禁 / 新股
+    category: str    # 财报 / 业绩披露 / 除权除息 / 解禁 / 新股
     symbol: str
     name: str
     detail: str

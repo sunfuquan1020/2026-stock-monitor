@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -16,7 +17,6 @@ from src.fetcher import (
     _load_local_history,
     _normalize_akshare_df,
     _parse_akshare_date,
-    _parse_stooq_date,
     _save_local_history,
     _update_history,
     fetch_daily_quotes,
@@ -111,17 +111,6 @@ class TestParseAkshareDate:
         assert _parse_akshare_date("invalid") == date.today()
 
 
-class TestParseStooqDate:
-    def test_valid_date(self):
-        assert _parse_stooq_date("2026-05-22") == date(2026, 5, 22)
-
-    def test_not_available(self):
-        assert _parse_stooq_date("N/D") == date.today()
-
-    def test_empty_string(self):
-        assert _parse_stooq_date("") == date.today()
-
-
 class TestLocalHistory:
     def test_save_and_load(self, tmp_path):
         path = str(tmp_path / "history.json")
@@ -147,6 +136,25 @@ class TestLocalHistory:
         _update_history(history, "AAPL", quote)
         _update_history(history, "AAPL", quote)
         assert len(history["AAPL"]) == 1
+
+    def test_update_history_replaces_same_day_zero_volume_with_live_quote(self):
+        history = {"AAPL": [{
+            "date": "2026-09-21", "open": 100, "high": 102, "low": 99,
+            "close": 100, "volume": 0, "change_pct": 0,
+        }]}
+        fresh = make_us_quote(d=date(2026, 9, 21), close=105)
+        _update_history(history, "AAPL", fresh)
+        assert history["AAPL"][0]["close"] == 105
+        assert history["AAPL"][0]["volume"] == fresh.volume
+
+    def test_update_history_does_not_replace_with_lower_volume(self):
+        fresh = make_us_quote(d=date(2026, 9, 21), close=105)
+        history = {}
+        _update_history(history, "AAPL", fresh)
+        stale = make_us_quote(d=date(2026, 9, 21), close=100)
+        stale = replace(stale, volume=0)
+        _update_history(history, "AAPL", stale)
+        assert history["AAPL"][0]["close"] == 105
 
     def test_update_history_keeps_90_days(self):
         history: dict[str, list[dict]] = {}
@@ -195,6 +203,26 @@ class TestLocalHistory:
 
 
 class TestFetchDailyQuotes:
+    def test_tencent_fallback_after_akshare_empty(self, tmp_path):
+        fallback = [make_us_quote(symbol="600519", d=date.today())]
+        with patch("src.fetcher._fetch_a_share_akshare", return_value=[]), \
+                patch("src.fetcher.fetch_a_share_kline_mootdx", return_value=[]) as mootdx, \
+                patch("src.fetcher.fetch_a_share_kline_tencent", return_value=fallback) as tencent:
+            result = fetch_daily_quotes(["600519"], market_map={"600519": "A股"}, output_dir=str(tmp_path))
+        assert result["600519"] == fallback
+        tencent.assert_called_once()
+        mootdx.assert_not_called()
+
+    def test_sina_us_history_fallback_when_yahoo_empty(self):
+        fallback = [make_us_quote(symbol="AAPL", d=date.today())]
+        with patch("src.fetcher.fetch_kline_yahoo", return_value=[]), \
+                patch("src.fetcher.fetch_kline_sina", return_value=fallback), \
+                patch("src.fetcher._fetch_us_finnhub", return_value=[]), \
+                patch("src.fetcher._fetch_us_tencent_latest", return_value=[]):
+            quotes = __import__("src.fetcher", fromlist=["_fetch_us_symbol"])._fetch_us_symbol(
+                "AAPL", date.today(), date.today(), {})
+        assert quotes == fallback
+
     @patch("src.fetcher.ak")
     def test_a_share_calls_akshare(self, mock_ak):
         mock_ak.stock_zh_a_hist.return_value = make_akshare_df(5)
@@ -215,33 +243,14 @@ class TestFetchDailyQuotes:
         mock_httpx.get.return_value = mock_resp
 
         with patch.dict("os.environ", {"FINNHUB_API_KEY": "test-key"}), \
-                patch("src.fetcher.fetch_kline_yahoo", return_value=[]):
+                patch("src.fetcher.fetch_kline_yahoo", return_value=[]), \
+                patch("src.fetcher.fetch_kline_sina", return_value=[]):
             result = fetch_daily_quotes(
                 ["AAPL"], days=30,
                 market_map={"AAPL": "美股"}, output_dir=str(tmp_path),
             )
             assert "AAPL" in result
             assert result["AAPL"][0].close == pytest.approx(308.82)
-
-    @patch("src.fetcher.httpx")
-    def test_us_stock_stooq_fallback(self, mock_httpx, tmp_path):
-        # Finnhub fails (no API key), Stooq works
-        mock_resp = MagicMock()
-        mock_resp.text = "Symbol,Date,Time,Open,High,Low,Close,Volume\nAAPL.US,2026-05-22,22:00:19,306.12,311.4,305.84,308.82,43608864"
-        mock_resp.raise_for_status = MagicMock()
-        mock_httpx.get.return_value = mock_resp
-
-        # No FINNHUB_API_KEY set
-        with patch.dict("os.environ", {}, clear=True):
-            env = os.environ.copy()
-            env.pop("FINNHUB_API_KEY", None)
-            with patch("os.environ", env), \
-                    patch("src.fetcher.fetch_kline_yahoo", return_value=[]):
-                result = fetch_daily_quotes(
-                    ["AAPL"], days=30,
-                    market_map={"AAPL": "美股"}, output_dir=str(tmp_path),
-                )
-                assert "AAPL" in result
 
     @patch("src.fetcher.httpx")
     def test_us_stock_history_merges(self, mock_httpx, tmp_path):
@@ -262,7 +271,8 @@ class TestFetchDailyQuotes:
         mock_httpx.get.return_value = mock_resp
 
         with patch.dict("os.environ", {"FINNHUB_API_KEY": "test-key"}), \
-                patch("src.fetcher.fetch_kline_yahoo", return_value=[]):
+                patch("src.fetcher.fetch_kline_yahoo", return_value=[]), \
+                patch("src.fetcher.fetch_kline_sina", return_value=[]):
             result = fetch_daily_quotes(
                 ["AAPL"], days=30,
                 market_map={"AAPL": "美股"}, output_dir=str(tmp_path),
@@ -271,9 +281,10 @@ class TestFetchDailyQuotes:
             assert len(result["AAPL"]) == 3
 
     def test_empty_when_all_fail(self, tmp_path):
-        # AKShare 空 + mootdx 兜底也空 -> 结果为空
+        # 所有 A 股来源均空 -> 结果为空
         with patch("src.fetcher.ak") as mock_ak, \
-                patch("src.fetcher.fetch_a_share_kline_mootdx", return_value=[]):
+                patch("src.fetcher.fetch_a_share_kline_mootdx", return_value=[]), \
+                patch("src.fetcher.fetch_a_share_kline_tencent", return_value=[]):
             mock_ak.stock_zh_a_hist.return_value = pd.DataFrame()
             result = fetch_daily_quotes(
                 ["000001"], days=30,
@@ -322,9 +333,10 @@ class TestFetchDailyQuotes:
             assert today_q.volume == 43608864              # 成交量补自 Yahoo
 
     def test_mootdx_fallback_used_when_akshare_empty(self, tmp_path):
-        # AKShare 返回空时，应改用 mootdx 兜底的数据
+        # AKShare 和腾讯返回空时，才使用 mootdx 最后兜底
         fallback_quotes = [make_us_quote(symbol="600519", d=date.today(), change_pct=0.0)]
         with patch("src.fetcher.ak") as mock_ak, \
+                patch("src.fetcher.fetch_a_share_kline_tencent", return_value=[]), \
                 patch("src.fetcher.fetch_a_share_kline_mootdx",
                       return_value=fallback_quotes) as mock_mootdx:
             mock_ak.stock_zh_a_hist.return_value = pd.DataFrame()
@@ -335,3 +347,109 @@ class TestFetchDailyQuotes:
             mock_mootdx.assert_called_once()
             assert "600519" in result
             assert result["600519"][0].symbol == "600519"
+
+
+class TestFinnhubTradeDate:
+    """Finnhub quote 必须按其时间戳(美东)落日期, 周末/假日运行不能伪造当天行情。"""
+
+    @patch("src.fetcher.httpx")
+    def test_weekend_run_uses_last_session_date(self, mock_httpx):
+        from src.fetcher import _fetch_us_finnhub
+
+        mock_resp = MagicMock()
+        # 1790366400 = 2026-09-25 20:00 UTC = 周五 16:00 美东收盘
+        mock_resp.json.return_value = {"c": 341.07, "o": 336.04, "h": 341.67, "l": 334.53,
+                                       "dp": 1.5331, "t": 1790366400}
+        mock_httpx.get.return_value = mock_resp
+
+        with patch.dict("os.environ", {"FINNHUB_API_KEY": "test-key"}):
+            quotes = _fetch_us_finnhub("AAPL")
+
+        assert quotes[0].date == date(2026, 9, 25)
+
+    def test_missing_timestamp_falls_back_to_today(self):
+        from src.fetcher import _finnhub_trade_date
+
+        assert _finnhub_trade_date(None) == date.today()
+
+
+class TestPurgeNonTradingRows:
+    def test_weekend_rows_are_removed(self):
+        from src.fetcher import _purge_weekend_rows
+
+        history = {"AAPL": [{"date": "2026-09-25", "close": 341.07},
+                            {"date": "2026-09-26", "close": 341.07}]}
+
+        removed = _purge_weekend_rows(history)
+
+        assert removed == 1
+        assert [r["date"] for r in history["AAPL"]] == ["2026-09-25"]
+
+    def test_weekday_rows_are_kept(self):
+        from src.fetcher import _purge_weekend_rows
+
+        history = {"AAPL": [{"date": "2026-09-24"}, {"date": "2026-09-25"}]}
+
+        assert _purge_weekend_rows(history) == 0
+
+
+def _tencent_us_line(price="341.07", prev="335.92", ts="2026-09-25 16:00:01", ticker="AAPL"):
+    """构造腾讯美股行情响应(73 字段, 下标同 2026-09 实测)。"""
+    fields = [""] * 73
+    fields[1], fields[2] = "苹果", f"{ticker}.OQ"
+    fields[3], fields[4], fields[5], fields[6] = price, prev, "336.04", "30002507"
+    fields[30] = ts
+    fields[32] = "9.99"   # 故意与昨收算出的涨跌幅不一致, 验证不直接信任该字段
+    fields[33], fields[34] = "341.67", "334.53"
+    return f'v_us{ticker}="{"~".join(fields)}";'
+
+
+class TestTencentUsQuote:
+    """腾讯美股报价替代已失效的 Stooq: 涨跌幅按昨收计算, 日期取报价时间戳。"""
+
+    def test_change_pct_uses_previous_close(self):
+        from src.fetcher import parse_tencent_us_quote
+
+        quote = parse_tencent_us_quote("AAPL", _tencent_us_line())
+
+        assert quote.change_pct == pytest.approx((341.07 - 335.92) / 335.92 * 100, abs=1e-4)
+
+    def test_date_and_volume_come_from_quote(self):
+        from src.fetcher import parse_tencent_us_quote
+
+        quote = parse_tencent_us_quote("AAPL", _tencent_us_line())
+
+        assert quote.date == date(2026, 9, 25)
+        assert quote.volume == 30002507
+        assert (quote.high, quote.low) == (341.67, 334.53)
+
+    def test_empty_response_returns_none(self):
+        from src.fetcher import parse_tencent_us_quote
+
+        assert parse_tencent_us_quote("AAPL", 'v_pv_none_match="1";') is None
+
+    def test_missing_previous_close_returns_none(self):
+        from src.fetcher import parse_tencent_us_quote
+
+        assert parse_tencent_us_quote("AAPL", _tencent_us_line(prev="")) is None
+
+    def test_tencent_symbol_keeps_share_class_dot(self):
+        from src.fetcher import tencent_us_code
+
+        assert tencent_us_code("brk.b") == "usBRK.B"
+
+    @patch("src.fetcher.httpx")
+    def test_used_as_fallback_when_finnhub_unavailable(self, mock_httpx, tmp_path):
+        mock_resp = MagicMock()
+        mock_resp.content = _tencent_us_line(ts=f"{date.today().isoformat()} 16:00:01").encode("gbk")
+        mock_resp.raise_for_status = MagicMock()
+        mock_httpx.get.return_value = mock_resp
+
+        env = {k: v for k, v in os.environ.items() if k != "FINNHUB_API_KEY"}
+        with patch.dict("os.environ", env, clear=True), \
+                patch("src.fetcher.fetch_kline_yahoo", return_value=[]), \
+                patch("src.fetcher.fetch_kline_sina", return_value=[]):
+            result = fetch_daily_quotes(["AAPL"], days=30,
+                                        market_map={"AAPL": "美股"}, output_dir=str(tmp_path))
+
+        assert result["AAPL"][-1].change_pct == pytest.approx(1.5331, abs=1e-3)

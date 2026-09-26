@@ -2,7 +2,7 @@
 
 集成 a-stock-data 工具包 (https://github.com/simonlin1212/a-stock-data) 的两项能力:
 - 基本面: 腾讯财经 API (PE/PB/市值/换手率/量比/涨跌停, HTTP GBK, 不封IP, 无需key)
-- 价格兜底: mootdx 通达信 TCP 日K线 (AKShare 限流失败时使用)
+- 价格兜底: 腾讯财经前复权 K 线；mootdx 通达信 TCP 日K线保留为末级兜底
 
 用法:
     basics = fetch_a_share_basics(["600519", "000001"])
@@ -11,6 +11,7 @@
 
 import json
 import logging
+import math
 from datetime import date
 from pathlib import Path
 
@@ -28,14 +29,89 @@ TENCENT_USER_AGENT = "Mozilla/5.0"
 
 # 腾讯字段索引 (实测校准, 见 a-stock-data SKILL)；注意 43=振幅 不是PB, PB在46
 TENCENT_MIN_FIELDS = 53
+TENCENT_KLINE_HOSTS = (
+    "https://web.ifzq.gtimg.cn",
+    "https://proxy.finance.qq.com/ifzqgtimg",
+    "https://ifzq.gtimg.cn",
+)
+
+
+def fetch_a_share_kline_tencent(symbol: str, bars: int = 40) -> list[DailyQuote]:
+    """腾讯前复权日线兜底；量从「手」转为股，成交额缺失保持 0。
+
+    北交所历史仅返回一根，不能冒充完整 K 线。单次最多 640 根。
+    """
+    if _a_share_prefix(symbol) == "bj":
+        logger.warning("腾讯历史 K 线不支持北交所: %s", symbol)
+        return []
+    if not symbol.isdigit() or len(symbol) != 6:
+        logger.warning("腾讯历史 K 线代码无效: %s", symbol)
+        return []
+    code = _a_share_prefix(symbol) + symbol
+    count = min(max(bars, 1), 640)
+    errors = []
+    for host in TENCENT_KLINE_HOSTS:
+        try:
+            response = httpx.get(
+                host + "/appstock/app/fqkline/get",
+                params={"param": f"{code},day,,,{count},qfq"},
+                headers={"Referer": "https://gu.qq.com/", "User-Agent": TENCENT_USER_AGENT},
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, dict):
+                raise ValueError("data 不是对象")
+            node = data.get(code, {})
+            if not isinstance(node, dict):
+                raise ValueError("data node 不是对象")
+            if "qfqday" in node:
+                rows = node["qfqday"]
+                if not rows and node.get("day"):
+                    raise ValueError("qfqday 为空但原始日线非空，拒绝混用复权口径")
+            else:
+                rows = node.get("day")  # 从未除权的标的只返回 day
+            if not isinstance(rows, list) or not rows:
+                raise ValueError("未返回日线列表")
+            parsed = []
+            seen = set()
+            for row in rows:
+                quote_date = date.fromisoformat(str(row[0])[:10])
+                if quote_date in seen:
+                    raise ValueError(f"重复日期 {quote_date}")
+                seen.add(quote_date)
+                open_, close, high, low = map(float, (row[1], row[2], row[3], row[4]))
+                volume = int(float(row[5]) * 100)
+                if (not all(math.isfinite(price) and price > 0 for price in (open_, close, high, low))
+                        or volume < 0):
+                    raise ValueError(f"非正价格或负成交量 {quote_date}")
+                parsed.append((quote_date, open_, close, high, low, volume))
+            parsed.sort()
+            quotes = []
+            previous = None
+            for quote_date, open_, close, high, low, volume in parsed:
+                change_pct = (close / previous - 1) * 100 if previous else 0.0
+                quotes.append(DailyQuote(
+                    symbol=symbol, date=quote_date, open=open_, close=close,
+                    high=high, low=low, volume=volume, turnover=0.0,
+                    change_pct=round(change_pct, 4),
+                ))
+                previous = close
+            logger.info("A 股 %s 日线降级为腾讯前复权: %s (%s 根)", symbol, host, len(quotes))
+            return quotes
+        except (httpx.HTTPError, ValueError, TypeError, KeyError, IndexError) as exc:
+            errors.append(f"{host}: {exc}")
+    logger.warning("腾讯历史 K 线获取失败 %s: %s", symbol, "; ".join(errors))
+    return []
 
 
 def _a_share_prefix(code: str) -> str:
     """6位A股代码 -> 腾讯/通达信市场前缀。"""
+    if code.startswith(("4", "8", "92")):
+        return "bj"
     if code.startswith(("6", "9")):
         return "sh"
-    elif code.startswith("8"):
-        return "bj"
     return "sz"
 
 

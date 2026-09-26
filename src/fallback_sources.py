@@ -135,6 +135,82 @@ def ipo_calendar() -> list[dict]:
     return out
 
 
+def _em_code_in(codes: list[str]) -> str:
+    """东财 filter 的多代码条件: (SECURITY_CODE in ("600519","000001"))。"""
+    quoted = ",".join(f'"{c}"' for c in codes)
+    return f"(SECURITY_CODE in ({quoted}))"
+
+
+def report_appointments(codes: list[str], period: date) -> list[dict]:
+    """定期报告预约披露日 (东财 RPT_PUBLIC_BS_APPOIN, urllib 传输)。
+
+    APPOINT_PUBLISH_DATE 是当前有效的预约日(改期后会更新); 已披露(IS_PUBLISH=1)的跳过。
+
+    Returns:
+        [{code, name, report_name, appoint_date(ISO), change_count}]
+    """
+    if not codes:
+        return []
+    rows = em_datacenter(
+        "RPT_PUBLIC_BS_APPOIN",
+        filter_=f"(REPORT_DATE='{period.isoformat()}')" + _em_code_in(codes),
+        sort_columns="APPOINT_PUBLISH_DATE",
+        sort_types="1",
+    )
+    out = []
+    for r in rows:
+        if str(r.get("IS_PUBLISH") or "0") == "1":
+            continue
+        appoint = str(r.get("APPOINT_PUBLISH_DATE") or "")[:10]
+        if not appoint:
+            continue
+        changes = sum(
+            1 for k in ("FIRST_CHANGE_DATE", "SECOND_CHANGE_DATE", "THIRD_CHANGE_DATE") if r.get(k)
+        )
+        out.append(
+            {
+                "code": str(r.get("SECURITY_CODE", "")).zfill(6),
+                "name": str(r.get("SECURITY_NAME_ABBR", "")),
+                "report_name": str(r.get("REPORT_TYPE_NAME", "")),
+                "appoint_date": appoint,
+                "change_count": changes,
+            }
+        )
+    return out
+
+
+def dividend_plans(codes: list[str], start: date) -> list[dict]:
+    """分红送转实施计划 (东财 RPT_SHAREBONUS_DET, urllib 传输), 只取除权除息日 >= start。
+
+    Returns:
+        [{code, name, ex_date(ISO), record_date(ISO), plan, progress}]
+    """
+    if not codes:
+        return []
+    rows = em_datacenter(
+        "RPT_SHAREBONUS_DET",
+        filter_=f"(EX_DIVIDEND_DATE>='{start.isoformat()}')" + _em_code_in(codes),
+        sort_columns="EX_DIVIDEND_DATE",
+        sort_types="1",
+    )
+    out = []
+    for r in rows:
+        ex_date = str(r.get("EX_DIVIDEND_DATE") or "")[:10]
+        if not ex_date:
+            continue
+        out.append(
+            {
+                "code": str(r.get("SECURITY_CODE", "")).zfill(6),
+                "name": str(r.get("SECURITY_NAME_ABBR", "")),
+                "ex_date": ex_date,
+                "record_date": str(r.get("EQUITY_RECORD_DATE") or "")[:10],
+                "plan": str(r.get("IMPL_PLAN_PROFILE") or ""),
+                "progress": str(r.get("ASSIGN_PROGRESS") or ""),
+            }
+        )
+    return out
+
+
 def lhb_detail(start: date, end: date) -> list[dict]:
     """龙虎榜明细 (东财 RPT_DAILYBILLBOARD_DETAILSNEW, urllib 传输)。
 
@@ -178,8 +254,8 @@ SINA_HEADERS = {"Referer": "https://finance.sina.com.cn/"}
 
 
 def _sina_prefix(code: str) -> str:
-    """6位A股代码 -> 新浪前缀码。920/8 开头是北交所。"""
-    if code.startswith(("92", "8")):
+    """6位A股代码 -> 新浪前缀码。4/8/92 开头是北交所。"""
+    if code.startswith(("4", "8", "92")):
         return f"bj{code}"
     return f"sh{code}" if code.startswith(("6", "9")) else f"sz{code}"
 

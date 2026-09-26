@@ -1,6 +1,8 @@
-"""未来风险日历: 美股财报(Finnhub) + A股解禁 + 新股申购(抽水)。
+"""未来风险日历: 财报/业绩披露 + 分红送转除权除息 + A股解禁 + 新股申购(抽水)。
 
-事前而非事后——NFLX 财报暴雷、解禁抛压、IPO抽水都应提前出现在报告里。
+事前而非事后——NFLX 财报暴雷、解禁抛压、IPO抽水、除权缺口都应提前出现在报告里。
+- A股: 定期报告预约披露日 + 分红送转除权除息日 (东财 datacenter)
+- 美股: 财报 Nasdaq(主)/Finnhub(备); 港股财报与美港股除息日 Yahoo calendarEvents
 所有获取独立容错, 失败降级为警告。
 """
 
@@ -19,6 +21,12 @@ FINNHUB_TIMEOUT = 15.0
 EARNINGS_DAYS_AHEAD = 10
 RESTRICTED_DAYS_AHEAD = 14
 IPO_DAYS_AHEAD = 7
+REPORT_DAYS_AHEAD = 30          # A股定期报告预约日: 提前一个月可见, 给足预警时间
+DIVIDEND_DAYS_AHEAD = 14        # 除权除息日
+GLOBAL_EVENTS_DAYS_AHEAD = 30   # Yahoo 港股财报/美港股除息
+REPORT_PERIOD_LOOKAHEAD_DAYS = 31  # 报告期结束前约一个月, 交易所开始公布预约日
+# 各报告期(月,日) → 法定披露截止(跨年, 月, 日)
+_REPORT_DEADLINES = {(3, 31): (0, 4, 30), (6, 30): (0, 8, 31), (9, 30): (0, 10, 31), (12, 31): (1, 4, 30)}
 
 
 def fetch_event_calendar(
@@ -30,9 +38,25 @@ def fetch_event_calendar(
 
     us_symbols = {s.symbol: s.name for s in watchlist if s.market == "美股"}
     a_symbols = {s.symbol: s.name for s in watchlist if s.market == "A股"}
+    global_symbols = {
+        s.symbol: (s.name, s.market) for s in watchlist if s.market in ("美股", "港股")
+    }
 
     earnings, w = _fetch_us_earnings(us_symbols)
     events.extend(earnings)
+    warnings.extend(w)
+
+    covered = {e.symbol for e in earnings if e.category == "财报"}
+    global_events, w = _fetch_global_corporate_events(global_symbols, covered)
+    events.extend(global_events)
+    warnings.extend(w)
+
+    report_dates, w = _fetch_a_share_report_dates(a_symbols)
+    events.extend(report_dates)
+    warnings.extend(w)
+
+    dividends, w = _fetch_a_share_dividends(a_symbols)
+    events.extend(dividends)
     warnings.extend(w)
 
     restricted, w = _fetch_a_share_restricted(a_symbols)
@@ -401,3 +425,139 @@ def _fetch_upcoming_ipos() -> tuple[list[CalendarEvent], list[str]]:
         logger.warning(f"IPO calendar parse failed: {e}")
         return [], [f"新股日历解析失败: {str(e)[:120]}"]
     return events, []
+
+
+# ═══════════════════════════════════════════════════════════
+# 重大公司事件: 业绩披露 / 分红送转 (A股东财) + 财报 / 除息 (美港股 Yahoo)
+# ═══════════════════════════════════════════════════════════
+
+
+def pending_report_periods(today: date) -> list[date]:
+    """当前可能有预约披露日的报告期: 截止日未过, 且报告期末距今不超过约一个月。"""
+    periods = []
+    for year in (today.year - 1, today.year):
+        for (month, day), (dy, dm, dd) in _REPORT_DEADLINES.items():
+            period = date(year, month, day)
+            deadline = date(year + dy, dm, dd)
+            if deadline >= today and period <= today + timedelta(days=REPORT_PERIOD_LOOKAHEAD_DAYS):
+                periods.append(period)
+    return sorted(periods)
+
+
+def _in_window(raw: str, today: date, days: int) -> bool:
+    try:
+        d = date.fromisoformat(raw[:10])
+    except (TypeError, ValueError):
+        return False
+    return today <= d <= today + timedelta(days=days)
+
+
+def _fetch_a_share_report_dates(
+    a_symbols: dict[str, str], today: date | None = None
+) -> tuple[list[CalendarEvent], list[str]]:
+    """A股定期报告(季报/中报/年报)预约披露日, 东财 RPT_PUBLIC_BS_APPOIN。"""
+    if not a_symbols:
+        return [], []
+    from src import fallback_sources as fb
+
+    today = today or date.today()
+    events: list[CalendarEvent] = []
+    for period in pending_report_periods(today):
+        try:
+            rows = fb.report_appointments(list(a_symbols), period)
+        except Exception as e:
+            logger.warning(f"业绩披露日历失败 {period}: {e}")
+            return events, [f"业绩披露日历获取失败({period}): {str(e)[:100]}"]
+        for r in rows:
+            if r["code"] not in a_symbols or not _in_window(r["appoint_date"], today, REPORT_DAYS_AHEAD):
+                continue
+            detail = f"{r['report_name']} 预约披露".strip()
+            if r["change_count"]:
+                detail += f"(已改期{r['change_count']}次)"
+            events.append(
+                CalendarEvent(
+                    event_date=r["appoint_date"],
+                    category="业绩披露",
+                    symbol=r["code"],
+                    name=a_symbols[r["code"]],
+                    detail=detail,
+                )
+            )
+    return events, []
+
+
+def _fetch_a_share_dividends(
+    a_symbols: dict[str, str], today: date | None = None
+) -> tuple[list[CalendarEvent], list[str]]:
+    """A股分红送转除权除息日, 东财 RPT_SHAREBONUS_DET。"""
+    if not a_symbols:
+        return [], []
+    from src import fallback_sources as fb
+
+    today = today or date.today()
+    try:
+        rows = fb.dividend_plans(list(a_symbols), today)
+    except Exception as e:
+        logger.warning(f"分红送转日历失败: {e}")
+        return [], [f"分红送转日历获取失败: {str(e)[:100]}"]
+    events = []
+    for r in rows:
+        if r["code"] not in a_symbols or not _in_window(r["ex_date"], today, DIVIDEND_DAYS_AHEAD):
+            continue
+        detail = r["plan"] or "分红送转"
+        if r["record_date"]:
+            detail += f", 股权登记日 {r['record_date']}"
+        events.append(
+            CalendarEvent(
+                event_date=r["ex_date"],
+                category="除权除息",
+                symbol=r["code"],
+                name=a_symbols[r["code"]],
+                detail=detail,
+            )
+        )
+    return events, []
+
+
+def _yahoo_calendar(yahoo_symbol: str, market: str) -> dict | None:
+    from src.global_stock import fetch_calendar_events
+
+    return fetch_calendar_events(yahoo_symbol)
+
+
+def _fetch_global_corporate_events(
+    symbols: dict[str, tuple[str, str]],
+    us_earnings_covered: set[str],
+    today: date | None = None,
+) -> tuple[list[CalendarEvent], list[str]]:
+    """美股/港股财报日与除息日 (Yahoo calendarEvents)。
+
+    美股财报已由 Nasdaq/Finnhub 覆盖的标的不重复添加; Yahoo 标注预估的日期在详情里注明。
+    """
+    if not symbols:
+        return [], []
+    from src.global_stock import to_yahoo_symbol
+
+    today = today or date.today()
+    events: list[CalendarEvent] = []
+    failed: list[str] = []
+    for symbol, (name, market) in symbols.items():
+        info = _yahoo_calendar(to_yahoo_symbol(symbol, market), market)
+        if info is None:
+            failed.append(symbol)
+            continue
+        earnings = info.get("earnings_date")
+        if (
+            earnings
+            and symbol not in us_earnings_covered
+            and _in_window(earnings, today, GLOBAL_EVENTS_DAYS_AHEAD)
+        ):
+            detail = "财报(日期预估,公司未确认)" if info.get("earnings_is_estimate") else "财报"
+            events.append(CalendarEvent(earnings, "财报", symbol, name, detail))
+        ex_div = info.get("ex_dividend_date")
+        if ex_div and _in_window(ex_div, today, GLOBAL_EVENTS_DAYS_AHEAD):
+            events.append(CalendarEvent(ex_div, "除权除息", symbol, name, "除息日"))
+    warnings = []
+    if failed:
+        warnings.append(f"美港股事件日历(Yahoo) {len(failed)} 只取数失败: {', '.join(failed[:8])}")
+    return events, warnings

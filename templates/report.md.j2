@@ -17,11 +17,11 @@
 {% if thermometer.cn_indexes %}
 {% set tape_map = {} %}
 {% for t in thermometer.index_tapes %}{% set _ = tape_map.update({t.name: t}) %}{% endfor %}
-| 指数 | 点位 | 涨跌幅 | 量比(20日) | 量能 | vs MA20 | vs MA60 | 距60日高 |
-|------|------|--------|-----------|------|---------|---------|---------|
+| 指数 | 点位 | 涨跌幅 | 点位源 | 量比(20日) | 量能 | vs MA20 | vs MA60 | 距60日高 |
+|------|------|--------|--------|-----------|------|---------|---------|---------|
 {% for q in thermometer.cn_indexes %}
 {% set t = tape_map.get(q.name) %}
-| {{ q.name }} | {{ "%.2f"|format(q.price) }} | {{ "%+.2f"|format(q.change_pct) }}% | {% if t %}{{ "%.2f"|format(t.vol_ratio_20d) }}{% else %}—{% endif %} | {% if t %}{{ t.vol_trend }}{% else %}—{% endif %} | {% if t %}{{ "%+.1f"|format(t.vs_ma20_pct) }}%{% else %}—{% endif %} | {% if t %}{{ "%+.1f"|format(t.vs_ma60_pct) }}%{% else %}—{% endif %} | {% if t %}{{ "%+.1f"|format(t.dist_60d_high_pct) }}%{% else %}—{% endif %} |
+| {{ q.name }} | {{ "%.2f"|format(q.price) }} | {{ "%+.2f"|format(q.change_pct) }}% | {{ q.source or "未标注" }} | {% if t %}{{ "%.2f"|format(t.vol_ratio_20d) }}{% else %}—{% endif %} | {% if t %}{{ t.vol_trend }}{% else %}—{% endif %} | {% if t %}{{ "%+.1f"|format(t.vs_ma20_pct) }}%{% else %}—{% endif %} | {% if t %}{{ "%+.1f"|format(t.vs_ma60_pct) }}%{% else %}—{% endif %} | {% if t %}{{ "%+.1f"|format(t.dist_60d_high_pct) }}%{% else %}—{% endif %} |
 {% endfor %}
 {% if thermometer.volume_price_note %}
 
@@ -155,10 +155,12 @@
 {% if calendar_events %}
 ## 未来风险日历
 
-| 日期 | 类型 | 标的 | 详情 |
-|------|------|------|------|
-{% for e in calendar_events %}
-| {{ e.event_date }} | {{ e.category }} | {{ e.name }}({{ e.symbol }}) | {{ e.detail }} |
+> 🔴 3 天内（持仓须提前决定减仓/回避） · 🟡 7 天内（列入观察）。覆盖：财报/业绩披露、分红送转除权除息、限售解禁、新股申购。
+
+| 倒计时 | 日期 | 类型 | 标的 | 详情 |
+|------|------|------|------|------|
+{% for r in calendar_events %}
+| {{ r.urgency }} {% if r.days_left is none %}—{% elif r.days_left == 0 %}今天{% else %}T-{{ r.days_left }}{% endif %} | {{ r.event.event_date }} | {{ r.event.category }} | {{ r.event.name }}({{ r.event.symbol }}) | {{ r.event.detail }} |
 {% endfor %}
 
 {% endif %}

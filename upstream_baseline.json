@@ -1,0 +1,20 @@
+{
+  "simonlin1212/a-stock-data": {
+    "synced_sha": "f814dcfe209dd7958f4858f9d878d591ee85fb56",
+    "synced_on": "2026-09-26",
+    "synced_version": "3.10.0",
+    "local_skill_paths": [
+      "~/.agents/skills/a-stock-data/SKILL.md"
+    ],
+    "note": "~/.claude/skills/<name> 是指向 ~/.agents/skills/<name> 的软链, 只改 ~/.agents 那份"
+  },
+  "simonlin1212/global-stock-data": {
+    "synced_sha": "5f27525709ab043b91e53d7a420ce6d46e66a0ce",
+    "synced_on": "2026-09-26",
+    "synced_version": "2.0.3",
+    "local_skill_paths": [
+      "~/.agents/skills/global-stock-data/SKILL.md"
+    ],
+    "note": "~/.claude/skills/<name> 是指向 ~/.agents/skills/<name> 的软链, 只改 ~/.agents 那份"
+  }
+}

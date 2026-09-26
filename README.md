@@ -16,8 +16,9 @@
 |------|--------|------|
 | A股历史行情 | AKShare (主) + mootdx (兜底) | AKShare 限流失败时自动用通达信 mootdx 兜底，不封 IP |
 | A股基本面 | 腾讯财经 | PE/PB/市值/换手率/量比/涨跌停，GBK 直连、无需 key |
+| A股指数点位 | 腾讯财经 (主) + mootdx (兜底) | 腾讯失败或缺项时按指数补齐，报告保留实际点位源 |
 | A股新闻 | AKShare (东方财富) | 个股新闻 |
-| 美股行情 | Finnhub (今日) + Stooq (备) + Yahoo (历史K线) | Finnhub 需 API Key；Yahoo 回填历史 OHLCV 含真实成交量 |
+| 美股行情 | Finnhub (今日) + 腾讯 (备) + Yahoo (历史K线) | Finnhub 需 API Key；Yahoo 回填历史 OHLCV 含真实成交量 |
 | 港股行情 | Yahoo Finance chart | 唯一日 K 线源，自动 `00700 -> 0700.HK` |
 | 美股/港股基本面 | Yahoo quoteSummary | PE/前瞻PE/PB/PEG/市值/ROE/利润率/目标价/评级 |
 
@@ -244,6 +245,8 @@ hypotheses:
 - **Today日报**: `output/YYYY-MM-DD-today.md`
 - **假设历史**: `output/hypothesis_history.json`
 - **美股历史**: `output/us_quote_history.json`
+- **重大事件预警**: 日报「未来风险日历」节（业绩披露/财报、除权除息、解禁、新股，含 T-n 倒计时与 🔴🟡 分级）
+- **上游周检报告**: `output/upstream/YYYY-MM-DD.md`（`python -m src.upstream_watch`，每周定时运行）
 
 ## 运行测试
 
@@ -338,7 +341,7 @@ stock-monitor/
 ├── src/
 │   ├── config.py        # 配置加载
 │   ├── models.py        # 数据模型
-│   ├── fetcher.py       # 数据获取 (AKShare + Finnhub + Stooq)
+│   ├── fetcher.py       # 数据获取 (AKShare + Finnhub + 腾讯)
 │   ├── astock.py        # A股增强 (腾讯财经基本面 + mootdx 兜底)
 │   ├── global_stock.py  # 美股/港股增强 (Yahoo K线 + 基本面)
 │   ├── anomaly.py       # 异动检测

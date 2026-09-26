@@ -6,7 +6,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
-from src.models import Anomaly, ReportData
+from src.models import Anomaly, CalendarEvent, ReportData
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ def generate_report(data: ReportData, template_dir: str) -> str:
         global_basics=data.global_basics,
         thermometer=data.thermometer,
         sector_signals=data.sector_signals,
-        calendar_events=data.calendar_events,
+        calendar_events=calendar_rows(data.calendar_events),
         fund_flows=data.fund_flows,
         lhb_entries=data.lhb_entries,
         northbound=data.northbound,
@@ -84,6 +84,33 @@ def generate_report(data: ReportData, template_dir: str) -> str:
         data_warnings=data.data_warnings,
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
+
+
+URGENT_DAYS = 3   # 🔴 3 天内: 持仓须提前决定是否减仓/回避
+SOON_DAYS = 7     # 🟡 一周内: 列入观察
+
+
+def calendar_rows(events, today: date | None = None) -> list[dict]:
+    """风险日历加倒计时与紧急度; 已过去的事件丢弃, 日期无法解析的保留但不计倒计时。"""
+    today = today or date.today()
+    rows = []
+    for e in events:
+        try:
+            days_left = (date.fromisoformat(e.event_date[:10]) - today).days
+        except (TypeError, ValueError):
+            days_left = None
+        if days_left is not None and days_left < 0:
+            continue
+        if days_left is None:
+            urgency = ""
+        elif days_left <= URGENT_DAYS:
+            urgency = "🔴"
+        elif days_left <= SOON_DAYS:
+            urgency = "🟡"
+        else:
+            urgency = ""
+        rows.append({"event": e, "days_left": days_left, "urgency": urgency})
+    return rows
 
 
 def generate_today_report(data: ReportData, template_dir: str) -> str:

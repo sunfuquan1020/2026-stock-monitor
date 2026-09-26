@@ -30,7 +30,17 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+# httpx INFO logs full request URLs, including Finnhub token query parameters.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+def _cleanup_generated_reports(output_dir: str, keep_days: int, dry_run: bool) -> int:
+    """Apply retention only to a live run; dry-run must never delete artifacts."""
+    if dry_run:
+        logger.info("Dry run: skipping old report cleanup")
+        return 0
+    return cleanup_old_reports(output_dir, keep_days)
 
 
 def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = False) -> str | None:
@@ -290,7 +300,7 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
 
     # 清理旧报告
     keep_days = config.get("output", {}).get("keep_days", 30)
-    deleted = cleanup_old_reports(output_dir, keep_days)
+    deleted = _cleanup_generated_reports(output_dir, keep_days, dry_run)
     if deleted:
         logger.info(f"Cleaned up {deleted} old reports")
 

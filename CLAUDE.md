@@ -24,7 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Python 3.11+
 - akshare: A股历史行情 (主) + A股新闻
 - mootdx: 通达信A股日线 (AKShare限流时兜底, TCP不封IP)
-- httpx: Finnhub美股行情 + Stooq备用 + 腾讯财经A股基本面 + Yahoo美股港股K线/基本面 + Ollama HTTP调用
+- httpx: Finnhub美股行情 + 腾讯美股备用 + 腾讯财经A股基本面 + Yahoo美股港股K线/基本面 + Ollama HTTP调用
 - pandas: 数据处理
 - anthropic: Claude API分析
 - pyyaml: 配置管理
@@ -57,7 +57,7 @@ Linear pipeline: config -> fetch -> detect -> analyze -> report
 - **models.py**: Immutable data models (frozen dataclasses), StockConfig includes `market` field
 - **fetcher.py**: Multi-market data fetching (A股 + 美股 + 港股)
   - A股: AKShare `stock_zh_a_hist` (primary) -> mootdx 通达信日线 (限流/失败兜底, 见 astock.py)
-  - 美股: Finnhub quote (今日行情, 需FINNHUB_API_KEY) -> Stooq `q/l/` (备), Yahoo chart 回填历史K线(含真实成交量), Finnhub的volume=0用Yahoo当日补全
+  - 美股: Finnhub quote (今日行情, 需FINNHUB_API_KEY) -> 腾讯 `qt.gtimg.cn/q=usXXX` (备, 涨跌幅按昨收自算; Stooq `q/l/` 2026-09 起 404 已移除), Yahoo chart 回填历史K线(含真实成交量), Finnhub的volume=0用Yahoo当日补全; Finnhub quote 按其时间戳 `t` 落**美东交易日**(`_finnhub_trade_date`), 周末/假日运行不再伪造当天行情; 加载历史时 `_purge_weekend_rows` 自动清除周末行。key 在 `~/.zshrc`, `run.sh` 自动 source
   - 港股: Yahoo chart 日K线 (唯一源, 见 global_stock.py)
   - 本地历史: `output/us_quote_history.json` 累积美股/港股每日行情, 涨跌幅按前收盘价重算
   - Rate limiting between requests (1s delay)
@@ -169,6 +169,8 @@ no_proxy=localhost,127.0.0.1,eastmoney.com,push2his.eastmoney.com
 - **A股K线**: AKShare(东财push2his) → mootdx 通达信 TCP (不走代理, 主源全挂时的救命稻草)
 - **龙虎榜**: 东财 datacenter(**唯一带净买额**) → 深交所+上交所官方 → akshare → 新浪
 - **解禁 / 新股**: 东财 datacenter → akshare → 新浪逐标的
+- **重大事件预警** (`src/calendar_events.py`): A股业绩披露预约日 `RPT_PUBLIC_BS_APPOIN` + 分红送转除权除息 `RPT_SHAREBONUS_DET` (东财 datacenter/urllib, 多代码 `SECURITY_CODE in (...)` 一次查); 港股财报 + 美港股除息日 Yahoo `calendarEvents` (美股财报已由 Nasdaq 覆盖的不重复加); 报告按倒计时 🔴≤3天 🟡≤7天 分级 (`report.calendar_rows`)。各源独立容错, 失败只进数据警告
+- **上游周检** (`src/upstream_watch.py`): 每周比对 a-stock-data / global-stock-data 的 GitHub HEAD 与 `upstream_baseline.json`, 只改 README/资源不触发同步; 同步流程见 `.agents/skills/stock/SKILL.md`「上游数据源周检」, 完成后 `--mark-synced` 推进基线
 - **财报日历**: Nasdaq `api.nasdaq.com/api/calendar/earnings` (**零鉴权, 主源**)
   → Finnhub(需 `FINNHUB_API_KEY`, 备)
 - **主力资金流**: push2 `ulist.np` 小批量(15/批) → **新浪日级四档净额**(逐标的)。
