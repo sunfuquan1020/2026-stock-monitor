@@ -16,8 +16,9 @@
 |------|--------|------|
 | A股历史行情 | AKShare (主) + mootdx (兜底) | AKShare 限流失败时自动用通达信 mootdx 兜底，不封 IP |
 | A股基本面 | 腾讯财经 | PE/PB/市值/换手率/量比/涨跌停，GBK 直连、无需 key |
+| A股指数点位 | 腾讯财经 (主) + mootdx (兜底) | 腾讯失败或缺项时按指数补齐，报告保留实际点位源 |
 | A股新闻 | AKShare (东方财富) | 个股新闻 |
-| 美股行情 | Finnhub (今日) + Stooq (备) + Yahoo (历史K线) | Finnhub 需 API Key；Yahoo 回填历史 OHLCV 含真实成交量 |
+| 美股行情 | Finnhub (今日) + 腾讯 (备) + Yahoo (历史K线) | Finnhub 需 API Key；Yahoo 回填历史 OHLCV 含真实成交量 |
 | 港股行情 | Yahoo Finance chart | 唯一日 K 线源，自动 `00700 -> 0700.HK` |
 | 美股/港股基本面 | Yahoo quoteSummary | PE/前瞻PE/PB/PEG/市值/ROE/利润率/目标价/评级 |
 
@@ -102,6 +103,83 @@ python -m src.main --config config.yaml --today
 python -m src.main --config config.yaml --dry-run --today
 ```
 
+### 使用 Web 工作台
+
+Web 工作台将现有 `output/` 中的日报、分析、判断和关注池转为可浏览界面。它是只读界面，不会修改分析产物、运行新分析或触发交易。
+
+#### 首次安装
+
+在项目根目录执行：
+
+```bash
+cd /Volumes/SSD2T/Users/fortune/2026-投资/2026-stock-monitor
+
+# 安装 Python Web 依赖
+uv sync --extra dev --extra web
+
+# 安装前端依赖并生成生产版界面
+npm --prefix web install
+npm --prefix web run build
+```
+
+#### 日常启动
+
+之后每次使用只需执行：
+
+```bash
+cd /Volumes/SSD2T/Users/fortune/2026-投资/2026-stock-monitor
+.venv/bin/stock-monitor-web
+```
+
+终端显示以下信息时表示启动成功：
+
+```text
+Uvicorn running on http://127.0.0.1:8000
+```
+
+然后在浏览器打开：
+
+- 工作台：[http://127.0.0.1:8000](http://127.0.0.1:8000)
+- OpenAPI 文档：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+
+终端按 `Control + C` 可停止服务。
+
+#### 界面功能
+
+- **总览**：查看市场 Regime、数据时点、质量警告和 A/B/C 机会分档。
+- **判断台账**：查看待验证判断、证伪条件和上期验证记录。
+- **报告库**：阅读历史 Markdown 日报和分析文档。
+- **刷新**：点击右上角刷新按钮，重新读取 `output/` 中的最新数据。
+- **主题**：点击右上角月亮/太阳按钮，切换明暗主题。
+
+#### 更新界面
+
+当 `web/` 中的前端代码或依赖发生变化时，重新构建：
+
+```bash
+npm --prefix web install
+npm --prefix web run build
+```
+
+新的 `/stock` 分析产物写入 `output/` 后不需重新构建前端，在页面点击刷新即可。
+
+#### 常见问题
+
+- **页面显示「frontend is not built」**：运行 `npm --prefix web run build`。
+- **提示端口 8000 已占用**：改用 `.venv/bin/stock-monitor-web --port 8001`，然后打开 `http://127.0.0.1:8001`。
+- **需要读取其他产物目录**：使用 `.venv/bin/stock-monitor-web --output-dir /path/to/output`。
+- **数据日期没更新**：先确认 `output/` 已有新产物，再点击页面右上角刷新按钮。
+
+#### 整合边界
+
+Web 界面参考 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 的 React/Vite + FastAPI 工作台形态，但保留本项目 `/stock` 分析流程和产物为唯一权威数据源：
+
+```text
+/stock 分析流程 → output/ 版本化产物 → 只读 FastAPI 适配层 → React 工作台
+```
+
+上游项目归属与许可信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 ## 配置说明
 
 配置文件 `config.yaml` 包含以下部分:
@@ -167,6 +245,8 @@ hypotheses:
 - **Today日报**: `output/YYYY-MM-DD-today.md`
 - **假设历史**: `output/hypothesis_history.json`
 - **美股历史**: `output/us_quote_history.json`
+- **重大事件预警**: 日报「未来风险日历」节（业绩披露/财报、除权除息、解禁、新股，含 T-n 倒计时与 🔴🟡 分级）
+- **上游周检报告**: `output/upstream/YYYY-MM-DD.md`（`python -m src.upstream_watch`，每周定时运行）
 
 ## 运行测试
 
@@ -261,7 +341,7 @@ stock-monitor/
 ├── src/
 │   ├── config.py        # 配置加载
 │   ├── models.py        # 数据模型
-│   ├── fetcher.py       # 数据获取 (AKShare + Finnhub + Stooq)
+│   ├── fetcher.py       # 数据获取 (AKShare + Finnhub + 腾讯)
 │   ├── astock.py        # A股增强 (腾讯财经基本面 + mootdx 兜底)
 │   ├── global_stock.py  # 美股/港股增强 (Yahoo K线 + 基本面)
 │   ├── anomaly.py       # 异动检测

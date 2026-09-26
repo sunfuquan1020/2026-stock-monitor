@@ -114,6 +114,28 @@ class IndexQuote:
     name: str
     price: float
     change_pct: float
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class IndexTape:
+    """指数量价结构（mootdx 日K衍生，腾讯简版行情拿不到成交量）。"""
+    symbol: str
+    name: str
+    vol_ratio_20d: float        # 当日成交量 / 20日均量
+    vol_trend: str              # 5日均量 vs 20日均量: 放量/平量/缩量
+    vs_ma20_pct: float          # 现价相对MA20
+    vs_ma60_pct: float          # 现价相对MA60（Markdown/Markup 分界）
+    dist_60d_high_pct: float
+
+
+@dataclass(frozen=True)
+class StyleStrength:
+    """小盘相对强度: 中证1000 / 沪深300。比值上行 = 小盘跑赢。"""
+    ratio: float
+    chg_5d_pct: float
+    chg_20d_pct: float
+    chg_60d_pct: float
 
 
 @dataclass(frozen=True)
@@ -144,6 +166,9 @@ class MarketThermometer:
     """市场体温计: 指数 + 宽度 + 两融 + regime状态机。"""
     cn_indexes: tuple[IndexQuote, ...] = ()
     global_indexes: tuple[IndexQuote, ...] = ()
+    index_tapes: tuple[IndexTape, ...] = ()   # 指数量价（按 name 与 cn_indexes 对应）
+    style_strength: StyleStrength | None = None
+    volume_price_note: str = ""               # 量价一句话提示（不参与 regime 判定）
     breadth: MarketBreadth | None = None
     margin: MarginSnapshot | None = None
     regime: str = "未知"
@@ -166,7 +191,7 @@ class SectorSignal:
 class CalendarEvent:
     """未来风险日历事件。"""
     event_date: str  # ISO日期
-    category: str    # 财报 / 解禁 / 新股
+    category: str    # 财报 / 业绩披露 / 除权除息 / 解禁 / 新股
     symbol: str
     name: str
     detail: str
@@ -174,11 +199,16 @@ class CalendarEvent:
 
 @dataclass(frozen=True)
 class FundFlowInfo:
-    """A股主力资金流（东财，当日）。"""
+    """A股主力资金流（当日）。
+
+    source: "东财" 或 "新浪"。两者口径不同(新浪按大单方向聚合)，不可混算；
+    新浪源不提供净占比，main_net_pct 为 None。
+    """
     symbol: str
     name: str
-    main_net_inflow_yi: float  # 主力净流入(亿)
-    main_net_pct: float        # 主力净占比(%)
+    main_net_inflow_yi: float   # 主力净流入(亿)
+    main_net_pct: float | None  # 主力净占比(%)，新浪源为 None
+    source: str = "东财"
 
 
 @dataclass(frozen=True)
@@ -189,6 +219,24 @@ class LhbEntry:
     trade_date: str
     reason: str
     net_buy_yi: float
+
+
+@dataclass(frozen=True)
+class NorthboundFlow:
+    """北向资金当日净流入（同花顺 hexin, 非东财, 市场级）。
+
+    东财北向字段自 2024-08 上游断供, 改用同花顺 hsgtApi 作非东财替代源。
+    单位: 亿元。沪股通/深股通任一异常时对应字段为 None。
+    """
+    hgt_net_yi: float | None   # 沪股通当日累计净买入(亿)
+    sgt_net_yi: float | None   # 深股通当日累计净买入(亿)
+    as_of: str                 # 数据时点 (HH:MM)
+
+    @property
+    def total_net_yi(self) -> float | None:
+        if self.hgt_net_yi is None and self.sgt_net_yi is None:
+            return None
+        return round((self.hgt_net_yi or 0.0) + (self.sgt_net_yi or 0.0), 2)
 
 
 @dataclass(frozen=True)
@@ -241,4 +289,6 @@ class ReportData:
     calendar_events: tuple[CalendarEvent, ...] = ()
     fund_flows: tuple[FundFlowInfo, ...] = ()
     lhb_entries: tuple[LhbEntry, ...] = ()
+    northbound: "NorthboundFlow | None" = None
+    northbound_top10: tuple[dict, ...] = ()  # HKEX 北向十大活跃股(成交额口径)
     data_warnings: tuple[str, ...] = ()

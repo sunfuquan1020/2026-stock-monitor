@@ -7,11 +7,18 @@ from datetime import date
 from pathlib import Path
 
 from src.anomaly import aggregate_sector_signals, detect_anomalies
-from src.astock import fetch_a_share_basics, fetch_fund_flow_rank, fetch_lhb_hits
+from src.astock import (
+    fetch_a_share_basics,
+    fetch_fund_flow_rank,
+    fetch_lhb_hits,
+    fetch_northbound_flow,
+    fetch_northbound_top10,
+)
 from src.calendar_events import fetch_event_calendar
 from src.config import MARKET_HK, get_hypotheses, get_thresholds, get_watchlist, load_config
 from src.fetcher import fetch_daily_quotes
 from src.global_stock import fetch_global_basics
+from src.http_urllib import ensure_domestic_via_proxy
 from src.hypothesis import check_hypotheses, save_hypothesis_history
 from src.llm import LLMProvider, create_provider
 from src.market import build_thermometer
@@ -23,7 +30,17 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+# httpx INFO logs full request URLs, including Finnhub token query parameters.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+def _cleanup_generated_reports(output_dir: str, keep_days: int, dry_run: bool) -> int:
+    """Apply retention only to a live run; dry-run must never delete artifacts."""
+    if dry_run:
+        logger.info("Dry run: skipping old report cleanup")
+        return 0
+    return cleanup_old_reports(output_dir, keep_days)
 
 
 def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = False) -> str | None:
@@ -37,6 +54,13 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
     Returns:
         生成的报告路径，失败返回None
     """
+    # 必须在任何网络调用之前: 把境内数据域名从 no_proxy 摘掉。
+    # run.sh 会 source ~/.zshrc, 其中 no_proxy 含 eastmoney.com, 导致东财走直连
+    # 而本机无境内出口 → TLS 层阻断。详见 src/http_urllib 模块说明。
+    removed_no_proxy = ensure_domestic_via_proxy()
+    if removed_no_proxy:
+        logger.info(f"代理修正: 已强制走代理的域名 {removed_no_proxy}")
+
     logger.info("Loading configuration...")
     config = load_config(config_path)
 
@@ -56,6 +80,69 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
         f"Monitoring {len(symbols)} symbols: A股 {a_share_count}只, "
         f"美股 {us_count}只, 港股 {hk_count}只"
     )
+
+    # Step 0: 修复历史里 Yahoo 回填缺失的美股成交量 (新浪日K)
+    # 必须在 fetch 之前: 异动检测的量能类信号直接读这份历史, volume=0 会
+    # 产出大量伪 high 信号 (2026-08-01 单日 10 条)。
+    pre_warnings: list[str] = []
+    us_symbols_all = [s for s in symbols if market_map.get(s) == "美股"]
+    if us_symbols_all:
+        try:
+            from src.fallback_sources import repair_us_volume
+
+            fixed, vol_warnings = repair_us_volume(
+                Path(output_dir) / "us_quote_history.json", us_symbols_all
+            )
+            pre_warnings.extend(vol_warnings)
+            if fixed:
+                logger.info(f"Repaired {fixed} zero-volume US history rows (新浪)")
+        except Exception as e:
+            logger.warning(f"US volume repair failed (non-fatal): {e}")
+
+    # ⚠️ 顺序很重要: 日历与资金面必须在抓行情**之前**跑。
+    # 这些接口不依赖行情数据, 而 A股K线阶段会向 push2his 发 74 次注定失败的
+    # 请求, 把本地代理打到不可用 —— 实测同样的东财 datacenter 调用空闲时
+    # 4/4 成功、放在抓行情之后则 0/4 (重试到 8s 退避仍失败)。
+
+    # Step 0b: 未来风险日历 (财报/解禁/新股)
+    calendar_events = []
+    try:
+        calendar_events, cal_warnings = fetch_event_calendar(watchlist)
+        pre_warnings.extend(cal_warnings)
+        logger.info(f"Calendar events: {len(calendar_events)}")
+    except Exception as e:
+        logger.warning(f"Event calendar failed (non-fatal): {e}")
+
+    # Step 0c: A股资金面 (主力资金流 + 龙虎榜 + 北向资金)
+    fund_flows, lhb_entries, northbound = [], [], None
+    northbound_top10: list[dict] = []
+    try:
+        a_share_names = {s.symbol: s.name for s in watchlist if s.market == "A股"}
+        fund_flows, ff_warnings = fetch_fund_flow_rank([s.symbol for s in watchlist if s.market == "A股"], a_share_names)
+        pre_warnings.extend(ff_warnings)
+        lhb_entries, lhb_warnings = fetch_lhb_hits([s.symbol for s in watchlist if s.market == "A股"])
+        pre_warnings.extend(lhb_warnings)
+        logger.info(f"Fund flows: {len(fund_flows)}, LHB hits: {len(lhb_entries)}")
+    except Exception as e:
+        logger.warning(f"Fund flow/LHB failed (non-fatal): {e}")
+    try:
+        northbound, nb_warnings = fetch_northbound_flow()
+        pre_warnings.extend(nb_warnings)
+        if northbound:
+            logger.info(f"Northbound: total {northbound.total_net_yi}亿")
+    except Exception as e:
+        logger.warning(f"Northbound failed (non-fatal): {e}")
+    try:
+        hkex, hk_warnings = fetch_northbound_top10()
+        pre_warnings.extend(hk_warnings)
+        if hkex:
+            northbound_top10 = hkex["top10"]
+            logger.info(
+                f"Northbound top10 (HKEX {hkex['date']}): {len(northbound_top10)} 只"
+            )
+    except Exception as e:
+        logger.warning(f"Northbound top10 failed (non-fatal): {e}")
+
 
     # Step 1: 获取行情数据（A股 + 美股）
     logger.info("Fetching daily quotes (A股 + 美股)...")
@@ -113,27 +200,7 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
     sector_signals = aggregate_sector_signals(quotes, watchlist, anomalies)
 
     # Step 2b: 数据质量检查 (stale美股等)
-    data_warnings = _check_data_quality(quotes, market_map)
-
-    # Step 2c: 未来风险日历 (财报/解禁/新股)
-    calendar_events = []
-    try:
-        calendar_events, cal_warnings = fetch_event_calendar(watchlist)
-        data_warnings.extend(cal_warnings)
-        logger.info(f"Calendar events: {len(calendar_events)}")
-    except Exception as e:
-        logger.warning(f"Event calendar failed (non-fatal): {e}")
-
-    # Step 2d: A股资金面 (主力资金流 + 龙虎榜)
-    fund_flows, lhb_entries = [], []
-    try:
-        fund_flows, ff_warnings = fetch_fund_flow_rank(a_share_symbols)
-        data_warnings.extend(ff_warnings)
-        lhb_entries, lhb_warnings = fetch_lhb_hits(a_share_symbols)
-        data_warnings.extend(lhb_warnings)
-        logger.info(f"Fund flows: {len(fund_flows)}, LHB hits: {len(lhb_entries)}")
-    except Exception as e:
-        logger.warning(f"Fund flow/LHB failed (non-fatal): {e}")
+    data_warnings = pre_warnings + _check_data_quality(quotes, market_map)
 
     # Step 3: 新闻分析
     analyses: list[AnalysisResult] = []
@@ -213,6 +280,8 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
         calendar_events=tuple(calendar_events),
         fund_flows=tuple(fund_flows),
         lhb_entries=tuple(lhb_entries),
+        northbound=northbound,
+        northbound_top10=tuple(northbound_top10),
         data_warnings=tuple(data_warnings),
     )
 
@@ -231,7 +300,7 @@ def run(config_path: str, output_dir: str, dry_run: bool = False, today: bool = 
 
     # 清理旧报告
     keep_days = config.get("output", {}).get("keep_days", 30)
-    deleted = cleanup_old_reports(output_dir, keep_days)
+    deleted = _cleanup_generated_reports(output_dir, keep_days, dry_run)
     if deleted:
         logger.info(f"Cleaned up {deleted} old reports")
 

@@ -1,10 +1,17 @@
 """Tests for market thermometer and regime state machine."""
 
+import time
 from datetime import date
 
+import pytest
+
 from src.market import (
+    _call_akshare_with_hard_timeout,
+    _call_with_requests_timeout,
     classify_regime,
     compute_sector_stats,
+    fetch_cn_indexes,
+    fetch_cn_indexes_mootdx,
     parse_tencent_index_line,
     update_regime_history,
 )
@@ -29,6 +36,15 @@ def make_quote(symbol: str, change_pct: float) -> DailyQuote:
     )
 
 
+def blocked_source():
+    time.sleep(2)
+    return "late"
+
+
+def immediate_source(value):
+    return {"value": value}
+
+
 class TestParseTencentIndexLine:
     def test_parses_valid_line(self):
         line = 'v_s_sh000001="1~上证指数~000001~3764.15~-118.61~-3.05~336059786~43046235~~475866.99~GP-A";'
@@ -41,6 +57,80 @@ class TestParseTencentIndexLine:
     def test_returns_none_for_garbage(self):
         assert parse_tencent_index_line('v_s_x="malformed";') is None
         assert parse_tencent_index_line("") is None
+
+
+class TestCnIndexFallback:
+    def test_uses_mootdx_when_tencent_request_fails(self, monkeypatch):
+        def fail_get(*args, **kwargs):
+            raise OSError("Tencent unavailable")
+
+        expected = [
+            IndexQuote("sh000001", "上证指数", 4100.0, 0.5, "mootdx（腾讯失败后降级）")
+        ]
+        monkeypatch.setattr("src.market.httpx.get", fail_get)
+        monkeypatch.setattr("src.market.fetch_cn_indexes_mootdx", lambda: expected)
+
+        assert fetch_cn_indexes() == expected
+
+    def test_mootdx_fallback_computes_change_from_last_two_bars(self):
+        import pandas as pd
+
+        class FakeClient:
+            def index(self, **kwargs):
+                return pd.DataFrame({"close": [100.0, 102.0]})
+
+        rows = fetch_cn_indexes_mootdx(client=FakeClient())
+
+        assert len(rows) == 7
+        assert rows[0].name == "上证指数"
+        assert rows[0].price == 102.0
+        assert rows[0].change_pct == 2.0
+        assert rows[0].source == "mootdx（腾讯失败后降级）"
+
+
+class TestSourceTimeout:
+    def test_hard_timeout_terminates_blocked_akshare_call(self, monkeypatch):
+        started = time.monotonic()
+        with pytest.raises(TimeoutError, match="blocked_source"):
+            _call_akshare_with_hard_timeout(
+                "blocked_source", timeout=0.05, _module_name="tests.test_market"
+            )
+        assert time.monotonic() - started < 1.0
+
+    def test_hard_timeout_returns_source_result(self, monkeypatch):
+        assert _call_akshare_with_hard_timeout(
+            "immediate_source", 7, timeout=1, _module_name="tests.test_market"
+        ) == {"value": 7}
+
+    def test_injects_default_timeout_into_akshare_requests(self, monkeypatch):
+        seen = {}
+
+        def fake_get(url, **kwargs):
+            seen["timeout"] = kwargs.get("timeout")
+            return "ok"
+
+        monkeypatch.setattr("requests.get", fake_get)
+
+        result = _call_with_requests_timeout(lambda: __import__("requests").get("https://example.test"), 12)
+
+        assert result == "ok"
+        assert seen["timeout"] == 12
+
+    def test_preserves_source_specific_timeout(self, monkeypatch):
+        seen = {}
+
+        def fake_get(url, **kwargs):
+            seen["timeout"] = kwargs.get("timeout")
+            return "ok"
+
+        monkeypatch.setattr("requests.get", fake_get)
+
+        _call_with_requests_timeout(
+            lambda: __import__("requests").get("https://example.test", timeout=3),
+            12,
+        )
+
+        assert seen["timeout"] == 3
 
 
 class TestClassifyRegime:

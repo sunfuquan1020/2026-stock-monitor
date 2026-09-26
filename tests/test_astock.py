@@ -10,7 +10,57 @@ from src.astock import (
     _normalize_mootdx_df,
     _parse_tencent_line,
     fetch_a_share_basics,
+    fetch_a_share_kline_tencent,
 )
+
+
+def test_tencent_kline_parses_qfq_and_lot_volume(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": {"sh600519": {"qfqday": [
+                ["2026-09-17", "100", "102", "103", "99", "12"],
+                ["2026-09-18", "103", "105", "106", "101", "15"],
+            ]}}}
+
+    monkeypatch.setattr("src.astock.httpx.get", lambda *args, **kwargs: Response())
+    quotes = fetch_a_share_kline_tencent("600519", bars=2)
+    assert [q.volume for q in quotes] == [1200, 1500]
+    assert quotes[1].change_pct == pytest.approx(2.9412)
+    assert quotes[0].turnover == 0.0
+
+
+def test_tencent_kline_rejects_raw_when_qfq_is_empty(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": {"sh600519": {"qfqday": [], "day": [
+                ["2026-09-18", "100", "102", "103", "99", "12"]
+            ]}}}
+
+    monkeypatch.setattr("src.astock.httpx.get", lambda *args, **kwargs: Response())
+    assert fetch_a_share_kline_tencent("600519", bars=2) == []
+
+
+def test_tencent_kline_does_not_use_bj_single_bar(monkeypatch):
+    monkeypatch.setattr("src.astock.httpx.get", lambda *args, **kwargs: pytest.fail("should not request"))
+    assert fetch_a_share_kline_tencent("920138", bars=40) == []
+
+
+def test_tencent_kline_malformed_data_returns_empty(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": None}
+
+    monkeypatch.setattr("src.astock.httpx.get", lambda *args, **kwargs: Response())
+    assert fetch_a_share_kline_tencent("600519", bars=5) == []
 
 
 # 真实腾讯返回格式样本 (贵州茅台)，字段以 ~ 分隔；尾部补足到 >=53 字段
@@ -49,6 +99,9 @@ class TestAShachePrefix:
 
     def test_beijing(self):
         assert _a_share_prefix("832000") == "bj"
+        assert _a_share_prefix("400001") == "bj"
+        assert _a_share_prefix("920138") == "bj"
+        assert _a_share_prefix("921001") == "bj"
 
 
 class TestParseTencentLine:

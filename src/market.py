@@ -5,14 +5,18 @@ regime 用可用数据尽力判断。
 """
 
 import json
+import importlib
 import logging
+import multiprocessing
 import statistics
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import quote as urlquote
+from unittest.mock import patch
 
 import httpx
 
+from src.index_kline import INDEX_KLINE_CODES, describe_volume_price, fetch_index_tapes
 from src.models import (
     DailyQuote,
     IndexQuote,
@@ -26,13 +30,20 @@ logger = logging.getLogger(__name__)
 
 TENCENT_INDEX_URL = "https://qt.gtimg.cn/q="
 TENCENT_TIMEOUT = 10.0
+AKSHARE_SOURCE_TIMEOUT = 12.0
+AKSHARE_PROCESS_JOIN_GRACE = 0.5
 
 # 腾讯简版行情 (s_ 前缀): 1~名称~代码~现价~涨跌~涨跌幅~...
+# 宽基三只(沪深300/中证500/中证1000)用于判断风格在大盘端还是中小市值端 ——
+# 主线的发力端经常在中小市值, 只看上证/创业板会漏掉。
 CN_INDEXES = [
     ("s_sh000001", "上证指数"),
     ("s_sz399001", "深证成指"),
     ("s_sz399006", "创业板指"),
     ("s_sh000688", "科创50"),
+    ("s_sh000300", "沪深300"),
+    ("s_sh000905", "中证500"),
+    ("s_sh000852", "中证1000"),
 ]
 
 YAHOO_CHART_URL = "https://query2.finance.yahoo.com/v8/finance/chart/"
@@ -70,9 +81,97 @@ ATTACK_GROWTH_GAIN = 1.5       # 成长指数涨幅 → 进攻
 ATTACK_DOWN_RATIO = 0.45       # 下跌占比上限 → 进攻
 
 
+def _call_with_requests_timeout(fetch, timeout: float = AKSHARE_SOURCE_TIMEOUT):
+    """Run one synchronous source while adding a default requests timeout.
+
+    Some AKShare endpoints call ``requests.get`` without a timeout. Patching the
+    function only for that single, sequential source call keeps a dead endpoint
+    from blocking the daily pipeline. A source-specific timeout remains intact.
+    """
+    import requests
+
+    original_get = requests.get
+
+    def timed_get(*args, **kwargs):
+        kwargs.setdefault("timeout", timeout)
+        return original_get(*args, **kwargs)
+
+    with patch.object(requests, "get", timed_get):
+        return fetch()
+
+
+def _terminate_process(process) -> None:
+    if process.is_alive():
+        process.terminate()
+        process.join(AKSHARE_PROCESS_JOIN_GRACE)
+    if process.is_alive() and hasattr(process, "kill"):
+        process.kill()
+        process.join(AKSHARE_PROCESS_JOIN_GRACE)
+
+
+def _akshare_worker(
+    conn, module_name: str, function_name: str, args: tuple, kwargs: dict, timeout: float
+) -> None:
+    try:
+        module = importlib.import_module(module_name)
+        function = getattr(module, function_name)
+        value = _call_with_requests_timeout(
+            lambda: function(*args, **kwargs), timeout=timeout
+        )
+        conn.send((True, value))
+    except BaseException as exc:
+        try:
+            conn.send((False, exc))
+        except BaseException:
+            conn.send((False, RuntimeError(f"{type(exc).__name__}: {exc}")))
+    finally:
+        conn.close()
+
+
+def _call_akshare_with_hard_timeout(
+    function_name: str,
+    *args,
+    timeout: float = AKSHARE_SOURCE_TIMEOUT,
+    _module_name: str = "akshare",
+    **kwargs,
+):
+    """Run one named AKShare function in a terminable subprocess."""
+    wait_seconds = float(timeout)
+    if wait_seconds <= 0:
+        raise ValueError("timeout must be positive")
+    methods = multiprocessing.get_all_start_methods()
+    start_method = "spawn" if "spawn" in methods else methods[0]
+    ctx = multiprocessing.get_context(start_method)
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    process = ctx.Process(
+        target=_akshare_worker,
+        args=(child_conn, _module_name, function_name, args, kwargs, wait_seconds),
+        name=f"akshare-{function_name}",
+        daemon=True,
+    )
+    process.start()
+    child_conn.close()
+    try:
+        if not parent_conn.poll(wait_seconds):
+            _terminate_process(process)
+            raise TimeoutError(f"{function_name} 调用超过 {wait_seconds:g}s，已终止")
+        try:
+            ok, value = parent_conn.recv()
+        except EOFError as exc:
+            raise RuntimeError(f"{function_name} 子进程未返回结果") from exc
+    finally:
+        parent_conn.close()
+        process.join(AKSHARE_PROCESS_JOIN_GRACE)
+        _terminate_process(process)
+    if ok:
+        return value
+    raise value
+
+
 def fetch_cn_indexes() -> list[IndexQuote]:
-    """腾讯简版行情获取A股指数（不封IP）。"""
+    """腾讯简版行情获取A股指数；失败或缺项时用 mootdx 日K补齐。"""
     codes = ",".join(c for c, _ in CN_INDEXES)
+    text = ""
     try:
         resp = httpx.get(
             TENCENT_INDEX_URL + codes,
@@ -83,7 +182,6 @@ def fetch_cn_indexes() -> list[IndexQuote]:
         text = resp.content.decode("gbk", errors="replace")
     except Exception as e:
         logger.warning(f"CN index fetch failed: {e}")
-        return []
 
     results = []
     for line in text.strip().split(";"):
@@ -93,6 +191,74 @@ def fetch_cn_indexes() -> list[IndexQuote]:
         parsed = parse_tencent_index_line(line)
         if parsed:
             results.append(parsed)
+
+    if len(results) == len(CN_INDEXES):
+        return results
+
+    fallback = fetch_cn_indexes_mootdx()
+    if not fallback:
+        logger.warning(
+            "CN index fallback exhausted: Tencent=%d/%d, mootdx=0/%d",
+            len(results), len(CN_INDEXES), len(CN_INDEXES),
+        )
+        return results
+
+    primary_by_name = {row.name: row for row in results}
+    fallback_by_name = {row.name: row for row in fallback}
+    merged = [
+        primary_by_name.get(name) or fallback_by_name.get(name)
+        for _, name in CN_INDEXES
+    ]
+    merged = [row for row in merged if row is not None]
+    logger.warning(
+        "CN index source degraded: Tencent=%d/%d, mootdx fallback=%d/%d",
+        len(results), len(CN_INDEXES), len(merged) - len(results), len(CN_INDEXES),
+    )
+    return merged
+
+
+def fetch_cn_indexes_mootdx(client=None) -> list[IndexQuote]:
+    """从 mootdx 指数日K构造点位快照，作为腾讯失败时的可见兜底。"""
+    if client is None:
+        try:
+            from mootdx.quotes import Quotes
+
+            client = Quotes.factory(market="std")
+        except Exception as e:
+            logger.warning(f"CN index mootdx client init failed: {e}")
+            return []
+
+    symbol_by_name = {
+        name: code.removeprefix("s_") for code, name in CN_INDEXES
+    }
+    results: list[IndexQuote] = []
+    for code, name in INDEX_KLINE_CODES:
+        try:
+            df = client.index(
+                symbol=code,
+                frequency=9,
+                offset=3,
+            )
+            if df is None or len(df) < 2:
+                logger.warning(
+                    "CN index mootdx %s too short: %d bars",
+                    code, 0 if df is None else len(df),
+                )
+                continue
+            closes = df["close"].astype(float)
+            previous, latest = float(closes.iloc[-2]), float(closes.iloc[-1])
+            if previous <= 0:
+                logger.warning(f"CN index mootdx {code} invalid previous close: {previous}")
+                continue
+            results.append(IndexQuote(
+                symbol=symbol_by_name.get(name, code),
+                name=name,
+                price=round(latest, 2),
+                change_pct=round((latest / previous - 1) * 100, 2),
+                source="mootdx（腾讯失败后降级）",
+            ))
+        except Exception as e:
+            logger.warning(f"CN index mootdx {code} fetch failed: {e}")
     return results
 
 
@@ -109,6 +275,7 @@ def parse_tencent_index_line(line: str) -> IndexQuote | None:
             name=fields[1],
             price=float(fields[3]),
             change_pct=float(fields[5]),
+            source="腾讯",
         )
     except (ValueError, IndexError):
         return None
@@ -130,7 +297,13 @@ def fetch_global_indexes() -> list[IndexQuote]:
                 continue
             change = (closes[-1] / closes[-2] - 1) * 100
             results.append(
-                IndexQuote(symbol=symbol, name=name, price=round(closes[-1], 2), change_pct=round(change, 2))
+                IndexQuote(
+                    symbol=symbol,
+                    name=name,
+                    price=round(closes[-1], 2),
+                    change_pct=round(change, 2),
+                    source="Yahoo",
+                )
             )
         except Exception as e:
             logger.warning(f"Global index {symbol} fetch failed: {e}")
@@ -140,9 +313,7 @@ def fetch_global_indexes() -> list[IndexQuote]:
 def fetch_breadth() -> MarketBreadth | None:
     """乐咕乐股全市场涨跌/涨跌停家数（AKShare单次调用）。"""
     try:
-        import akshare as ak
-
-        df = ak.stock_market_activity_legu()
+        df = _call_akshare_with_hard_timeout("stock_market_activity_legu")
         kv = dict(zip(df["item"], df["value"]))
         return MarketBreadth(
             up_count=int(float(kv.get("上涨", 0))),
@@ -159,10 +330,12 @@ def fetch_breadth() -> MarketBreadth | None:
 def fetch_margin() -> MarginSnapshot | None:
     """沪市两融余额及日变化（亿元，T+1披露）。"""
     try:
-        import akshare as ak
-
         start = (date.today() - timedelta(days=10)).strftime("%Y%m%d")
-        df = ak.stock_margin_sse(start_date=start, end_date=date.today().strftime("%Y%m%d"))
+        df = _call_akshare_with_hard_timeout(
+            "stock_margin_sse",
+            start_date=start,
+            end_date=date.today().strftime("%Y%m%d"),
+        )
         if df is None or len(df) < 2:
             return None
         df = df.sort_values("信用交易日期")
@@ -301,9 +474,14 @@ def build_thermometer(
     watchlist: list[StockConfig],
     output_dir: str,
 ) -> MarketThermometer:
-    """组装市场体温计（每路数据独立容错）。"""
+    """组装市场体温计（每路数据独立容错）。
+
+    ⚠️ index_tapes/style_strength 只做呈现, **不参与 classify_regime** ——
+    regime 序列必须跨日可比, 改判据会让历史轨迹失去意义。
+    """
     cn_indexes = fetch_cn_indexes()
     global_indexes = fetch_global_indexes()
+    index_tapes, style_strength = fetch_index_tapes()
     breadth = fetch_breadth()
     margin = fetch_margin()
 
@@ -311,9 +489,16 @@ def build_thermometer(
     regime, reasons = classify_regime(cn_indexes, breadth, sector_stats)
     history = update_regime_history(output_dir, date.today(), regime, reasons)
 
+    vp_note = describe_volume_price(
+        index_tapes, {q.name: q.change_pct for q in cn_indexes}
+    )
+
     return MarketThermometer(
         cn_indexes=tuple(cn_indexes),
         global_indexes=tuple(global_indexes),
+        index_tapes=tuple(index_tapes),
+        style_strength=style_strength,
+        volume_price_note=vp_note,
         breadth=breadth,
         margin=margin,
         regime=regime,
